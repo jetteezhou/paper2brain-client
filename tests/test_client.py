@@ -9,8 +9,10 @@ from unittest import mock
 os.environ["P2B_CLIENT_HOME"] = tempfile.mkdtemp(prefix="p2b-client-")
 
 import contextlib  # noqa: E402
+import io  # noqa: E402
+import json  # noqa: E402
 
-from p2b_client import codex, cursor, remote  # noqa: E402
+from p2b_client import api, codex, cursor, remote  # noqa: E402
 
 
 def sse(*pairs):
@@ -83,6 +85,26 @@ class Client(unittest.TestCase):
         method, path, body = call.call_args[0][1:4]
         self.assertEqual((method, path, body["env"], body["agentId"], body["model"]), ("POST", "/agents", {"type": "machine", "name": "p2b-mac"}, "bc-1", {"id": "claude-x"}))
         self.assertEqual(body["prompt"]["images"], [{"data": "aGk=", "mimeType": "image/png"}])
+
+
+    def test_quick_search_goes_through_the_configured_proxy(self):
+        seen = {}
+
+        class Opener:
+            def open(self, req, timeout):
+                seen.update(url=req.full_url, body=json.loads(req.data), timeout=timeout)
+                return contextlib.nullcontext(io.BytesIO(json.dumps({"choices": [{"message": {"content": "好标题"}}]}).encode()))
+
+        def build(*handlers):
+            seen["proxies"] = [h.proxies for h in handlers]
+            return Opener()
+        g = {"base_url": "https://generativelanguage.googleapis.com/v1beta/openai", "model": "gemini-x", "api_key": "k"}
+        with mock.patch.object(api.urllib.request, "build_opener", build):
+            self.assertEqual(api.chat(g, "起个标题", 30, "http://127.0.0.1:7890"), {"text": "好标题"})
+        self.assertEqual(seen["proxies"], [{"http": "http://127.0.0.1:7890", "https": "http://127.0.0.1:7890"}])
+        self.assertEqual((seen["url"], seen["body"]["model"], "thinking" in seen["body"]),
+                         ("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-x", False))
+        self.assertFalse(api.ready({"base_url": "https://x", "model": "m"}))  # no key: not offered to the server
 
 
 if __name__ == "__main__":
