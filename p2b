@@ -1,0 +1,4 @@
+#!/bin/sh
+# What the agent runs: every command goes to the paper2brain server (p2b_client/remote.py).
+here="$(cd "$(dirname "$0")" && pwd)"
+PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m p2b_client "$@"

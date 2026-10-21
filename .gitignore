@@ -1,0 +1,3 @@
+__pycache__/
+# fetched from the server by ./p2b guide; it changes with the server, not with this repo
+librarian/

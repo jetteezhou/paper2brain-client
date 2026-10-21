@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Keeps TCodex for the shared server running on this Mac (restarts it if it exits). REPO is replaced on install; see ops/install.sh. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.paper2brain.tcodex</string>
+  <key>ProgramArguments</key>
+  <array><string>/bin/sh</string><string>REPO/ops/tcodex.sh</string></array>
+  <key>WorkingDirectory</key><string>REPO</string>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>HOMEDIR/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string></dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>15</integer>
+  <key>StandardOutPath</key><string>/tmp/paper2brain-tcodex.log</string>
+  <key>StandardErrorPath</key><string>/tmp/paper2brain-tcodex.log</string>
+</dict>
+</plist>
