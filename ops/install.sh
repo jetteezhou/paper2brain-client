@@ -1,6 +1,6 @@
 #!/bin/sh
-# Install (or reinstall) the Cursor worker and, when asked, TCodex as login-time LaunchAgents that restart when they exit.
-# Usage: ops/install.sh worker [tcodex]
+# Install (or reinstall) the Cursor worker and the runner as login-time LaunchAgents that restart when they exit.
+# Usage: ops/install.sh worker runner
 set -e
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 case "$REPO" in *"/Mobile Documents/"*)
@@ -9,7 +9,7 @@ case "$REPO" in *"/Mobile Documents/"*)
 esac
 AGENTS="$HOME/Library/LaunchAgents"
 mkdir -p "$AGENTS"
-for name in ${*:-worker}; do
+for name in ${*:-worker runner}; do
   label="com.paper2brain.$name"
   launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
   # bootout returns before the job is gone; bootstrapping too early fails with "5: Input/output error"
@@ -17,4 +17,4 @@ for name in ${*:-worker}; do
   sed -e "s#REPO#$REPO#g" -e "s#HOMEDIR#$HOME#g" "$REPO/ops/$label.plist" > "$AGENTS/$label.plist"
   launchctl bootstrap "gui/$(id -u)" "$AGENTS/$label.plist"
 done
-echo "已安装：${*:-worker}（日志 /tmp/paper2brain-worker.log、/tmp/paper2brain-tcodex.log）"
+echo "已安装：${*:-worker runner}（日志 /tmp/paper2brain-worker.log、/tmp/paper2brain-runner.log）"

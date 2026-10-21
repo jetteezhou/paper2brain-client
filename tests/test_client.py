@@ -8,7 +8,17 @@ from unittest import mock
 
 os.environ["P2B_CLIENT_HOME"] = tempfile.mkdtemp(prefix="p2b-client-")
 
-from p2b_client import codex, remote  # noqa: E402
+import contextlib  # noqa: E402
+
+from p2b_client import codex, cursor, remote  # noqa: E402
+
+
+def sse(*pairs):
+    """A Cursor run stream as the lines urlopen yields."""
+    out = []
+    for event, data in pairs:
+        out += [f"event: {event}\n".encode(), f"data: {data}\n".encode(), b"\n"]
+    return out
 
 
 class Client(unittest.TestCase):
@@ -46,6 +56,33 @@ class Client(unittest.TestCase):
         self.assertEqual(seen[0][2], "s-1")
         self.assertTrue((bin_dir / "seen").read_text().strip().endswith("-m m resume s-0 接着说"))
         self.assertTrue((bin_dir / "seen").read_text().startswith("codex-1 "))
+
+
+    def test_cursor_stream_to_its_result(self):
+        stream = sse(("status", '{"status":"RUNNING"}'), ("assistant", '{"text":"答"}'),
+                     ("tool_call", '{"callId":"c1","name":"shell","status":"done","args":{"command":"./p2b papers"}}'),
+                     ("assistant", '{"text":"案"}'), ("result", '{"status":"FINISHED","text":"答案","durationMs":7}'))
+        seen = []
+        with mock.patch.object(cursor, "_request", return_value=contextlib.nullcontext(stream)):
+            out = cursor.follow("k", "bc-1", "run-1", lambda text, tools: seen.append(text) or True)
+        self.assertEqual(out, ("答案", [{"name": "shell", "status": "done", "args": "./p2b papers"}], "FINISHED", 7, None))
+        self.assertEqual(seen[-1], "答案"[:2])
+
+    def test_a_run_stopped_on_the_server_is_cancelled_at_cursor(self):
+        stream = sse(("assistant", '{"text":"一"}'), ("assistant", '{"text":"二"}'), ("result", '{"status":"FINISHED","text":"x"}'))
+        with mock.patch.object(cursor, "_request", return_value=contextlib.nullcontext(stream)), \
+                mock.patch.object(cursor, "cancel") as cancel:
+            out = cursor.follow("k", "bc-1", "run-1", lambda text, tools: False)
+        self.assertEqual(out[2], "CANCELLED")
+        cancel.assert_called_once_with("k", "bc-1", "run-1")
+
+    def test_a_new_agent_is_created_on_this_macs_worker(self):
+        with mock.patch.object(cursor, "_json", return_value={"run": {"id": "run-1"}}) as call:
+            cursor.start("k", {"new": True, "agent_id": "bc-1", "prompt": "你好", "repo": "https://github.com/x/client",
+                               "model": {"id": "claude-x"}, "name": "讨论"}, "p2b-mac", [{"data": "aGk=", "mime": "image/png"}])
+        method, path, body = call.call_args[0][1:4]
+        self.assertEqual((method, path, body["env"], body["agentId"], body["model"]), ("POST", "/agents", {"type": "machine", "name": "p2b-mac"}, "bc-1", {"id": "claude-x"}))
+        self.assertEqual(body["prompt"]["images"], [{"data": "aGk=", "mimeType": "image/png"}])
 
 
 if __name__ == "__main__":
