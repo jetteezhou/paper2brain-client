@@ -71,7 +71,12 @@ EOF
 PATH="$HOME/.local/bin:/opt/homebrew/bin:$PATH"
 command -v agent >/dev/null || command -v cursor-agent >/dev/null || curl https://cursor.com/install -fsS | bash
 launchctl bootout "gui/$(id -u)/com.paper2brain.tcodex" 2>/dev/null && rm -f "$HOME/Library/LaunchAgents/com.paper2brain.tcodex.plist" || true  # replaced by the runner
+# sign in now, in this terminal; otherwise the first TCodex run in the background is what asks for it
+if command -v tcodex >/dev/null; then
+  tcodex login && echo "✓ 也找到了 tcodex 并已登录：网页的模型列表里会出现 TCodex 的模型" \
+    || echo "（tcodex 登录没完成：之后运行 tcodex login 即可）"
+else
+  echo "（没找到 tcodex：要用 TCodex 的模型，装好并 tcodex login 后重启 runner：launchctl kickstart -k gui/$(id -u)/com.paper2brain.runner）"
+fi
 sh ops/install.sh worker runner
-command -v tcodex >/dev/null && echo "✓ 也找到了 tcodex：网页的模型列表里会出现 TCodex 的模型" \
-  || echo "（没找到 tcodex：要用 TCodex 的模型，装好并 tcodex login 后重启 runner：launchctl kickstart -k gui/$(id -u)/com.paper2brain.runner）"
 echo "✓ 好了：网页上的 agent 和快速搜索都在这台 Mac 上运行（Mac 关机时它们不可用，其他功能照常）。"
