@@ -38,8 +38,8 @@ def _args(session, text, images, model):
 
 def codex_turn(session, text, images, model, progress, started=None, env=None):
     """images: [(bytes, mime)]. progress(text, tools, new session id or None) after each event; started(process) lets
-    the caller stop it. Returns (text, tools, error)."""
-    out, tools, error, notice = "", {}, None, None
+    the caller stop it. Returns (text, tools, error, usage): tokens summed over its turn.completed events."""
+    out, tools, error, notice, usage = "", {}, None, None, {}
     with tempfile.TemporaryDirectory() as tmp:
         paths = []
         for i, (data, mime) in enumerate(images):
@@ -60,6 +60,12 @@ def codex_turn(session, text, images, model, progress, started=None, env=None):
                 kind, item, new = ev.get("type"), ev.get("item") or {}, None
                 if kind == "thread.started":
                     new = ev["thread_id"]
+                elif kind == "turn.completed":  # input includes its cached part, output its reasoning
+                    u = ev.get("usage") or {}
+                    for mine, theirs in (("input_tokens", "input_tokens"), ("cached_tokens", "cached_input_tokens"), ("output_tokens", "output_tokens")):
+                        if isinstance(u.get(theirs), int):
+                            usage[mine] = usage.get(mine, 0) + u[theirs]
+                    continue
                 elif kind == "turn.failed":
                     error = (ev.get("error") or {}).get("message")
                 elif kind == "error":  # also "Reconnecting... 2/5" mid-turn: fatal only if the turn fails or the process exits non-zero
@@ -76,4 +82,4 @@ def codex_turn(session, text, images, model, progress, started=None, env=None):
             err.seek(0)
             if p.returncode and not error:
                 error = notice or err.read()[-300:].strip() or f"tcodex 退出码 {p.returncode}"
-    return out, list(tools.values()), error
+    return out, list(tools.values()), error, usage

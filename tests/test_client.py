@@ -48,12 +48,15 @@ class Client(unittest.TestCase):
             'echo \'{"type":"thread.started","thread_id":"s-1"}\'\necho "not json"\n'
             'echo \'{"type":"item.completed","item":{"id":"i1","type":"command_execution","command":"./p2b papers"}}\'\n'
             'echo \'{"type":"error","message":"Reconnecting... 2/5"}\'\n'
-            'echo \'{"type":"item.completed","item":{"id":"i2","type":"agent_message","text":"答案"}}\'\n')
+            'echo \'{"type":"item.completed","item":{"id":"i2","type":"agent_message","text":"答案"}}\'\n'
+            'echo \'{"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":80,"output_tokens":7}}\'\n'
+            'echo \'{"type":"turn.completed","usage":{"input_tokens":50,"cached_input_tokens":0,"output_tokens":3}}\'\n')
         (bin_dir / "tcodex").chmod(0o755)
         seen = []
         with mock.patch.object(codex, "PATH", f"{bin_dir}:/usr/bin:/bin"):
-            text, tools, error = codex.codex_turn("s-0", "接着说", [], {"id": "m"}, lambda *a: seen.append(a), env={"P2B_AGENT_ID": "codex-1"})
+            text, tools, error, usage = codex.codex_turn("s-0", "接着说", [], {"id": "m"}, lambda *a: seen.append(a), env={"P2B_AGENT_ID": "codex-1"})
         self.assertEqual((text, error), ("答案", None))
+        self.assertEqual(usage, {"input_tokens": 150, "cached_tokens": 80, "output_tokens": 10})
         self.assertEqual(tools, [{"name": "command_execution", "status": "done", "args": "./p2b papers"}])
         self.assertEqual(seen[0][2], "s-1")
         self.assertTrue((bin_dir / "seen").read_text().strip().endswith("-m m resume s-0 接着说"))
@@ -62,12 +65,14 @@ class Client(unittest.TestCase):
 
     def test_cursor_stream_to_its_result(self):
         stream = sse(("status", '{"status":"RUNNING"}'), ("assistant", '{"text":"答"}'),
+                     ("interaction_update", '{"type":"token-delta","tokens":3}'),
                      ("tool_call", '{"callId":"c1","name":"shell","status":"done","args":{"command":"./p2b papers"}}'),
-                     ("assistant", '{"text":"案"}'), ("result", '{"status":"FINISHED","text":"答案","durationMs":7}'))
+                     ("assistant", '{"text":"案"}'), ("interaction_update", '{"type":"token-delta","tokens":2}'),
+                     ("result", '{"status":"FINISHED","text":"答案","durationMs":7}'))
         seen = []
         with mock.patch.object(cursor, "_request", return_value=contextlib.nullcontext(stream)):
             out = cursor.follow("k", "bc-1", "run-1", lambda text, tools: seen.append(text) or True)
-        self.assertEqual(out, ("答案", [{"name": "shell", "status": "done", "args": "./p2b papers"}], "FINISHED", 7, None))
+        self.assertEqual(out, ("答案", [{"name": "shell", "status": "done", "args": "./p2b papers"}], "FINISHED", 7, None, {"output_tokens": 5}))
         self.assertEqual(seen[-1], "答案"[:2])
 
     def test_a_run_stopped_on_the_server_is_cancelled_at_cursor(self):

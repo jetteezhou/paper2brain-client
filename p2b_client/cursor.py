@@ -83,8 +83,9 @@ def events(lines):
 
 def follow(key, agent_id, run_id, report):
     """Stream the run to its end. report(text, tools) after changes; when it returns False (stopped on the server)
-    the run is cancelled. Returns (text, tools, status, duration_ms, error)."""
-    text, tools = "", {}
+    the run is cancelled. Returns (text, tools, status, duration_ms, error, usage); usage has the output tokens counted
+    off the stream, and stays empty when the stream broke (Cursor reports no input tokens)."""
+    text, tools, out_tokens = "", {}, 0
 
     def changed():
         if not report(text, list(tools.values())):
@@ -103,13 +104,17 @@ def follow(key, agent_id, run_id, report):
                 elif event == "tool_call":
                     tools[payload["callId"]] = {"name": payload.get("name"), "status": payload.get("status"), "args": _short(payload.get("args"))}
                 elif event == "result":
-                    return payload.get("text") or text, list(tools.values()), payload.get("status", "FINISHED"), payload.get("durationMs"), None
+                    return (payload.get("text") or text, list(tools.values()), payload.get("status", "FINISHED"), payload.get("durationMs"), None,
+                            {"output_tokens": out_tokens})
                 elif event == "error":
                     raise CursorError(payload.get("message", "stream error"))
+                elif event == "interaction_update" and payload.get("type") == "token-delta":
+                    out_tokens += payload.get("tokens") or 0
+                    continue
                 elif event != "status":
                     continue
                 if not changed():
-                    return text, list(tools.values()), "CANCELLED", None, None
+                    return text, list(tools.values()), "CANCELLED", None, None, {}
     except Exception:
         pass  # stream dropped or expired: poll the run instead
     while True:
@@ -119,7 +124,7 @@ def follow(key, agent_id, run_id, report):
             time.sleep(10)
             continue
         if run.get("status") in TERMINAL:
-            return run.get("result") or text, list(tools.values()), run["status"], run.get("durationMs"), None
+            return run.get("result") or text, list(tools.values()), run["status"], run.get("durationMs"), None, {}
         if not changed():
-            return text, list(tools.values()), "CANCELLED", None, None
+            return text, list(tools.values()), "CANCELLED", None, None, {}
         time.sleep(3)

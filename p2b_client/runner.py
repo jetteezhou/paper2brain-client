@@ -45,10 +45,11 @@ def run_cursor(server, token, job, key, machine):
     report, started = _reporter(server, token, job), time.time()
     try:
         run = cursor.start(key, job, machine, job.get("images") or [])
-        text, tools, status, duration, error = cursor.follow(key, job["agent_id"], run["id"], lambda t, tl: report(text=t, tools=tl))
+        text, tools, status, duration, error, usage = cursor.follow(key, job["agent_id"], run["id"], lambda t, tl: report(text=t, tools=tl))
     except Exception as e:
-        text, tools, status, duration, error = "", [], "ERROR", None, str(e) if str(e).startswith("Cursor API") else f"本机调用 Cursor 失败：{e}"
-    report(True, text=text, tools=tools, done=True, status=status, error=error, duration_ms=duration or int((time.time() - started) * 1000))
+        text, tools, status, duration, error, usage = "", [], "ERROR", None, str(e) if str(e).startswith("Cursor API") else f"本机调用 Cursor 失败：{e}", {}
+    report(True, text=text, tools=tools, done=True, status=status, error=error, duration_ms=duration or int((time.time() - started) * 1000),
+           usage=usage)
 
 
 def run_codex(server, token, job):
@@ -61,10 +62,10 @@ def run_codex(server, token, job):
     env = {"P2B_SERVER": server, "P2B_TOKEN": token, "P2B_AGENT_ID": job["agent_id"], "P2B_LIBRARY": job["library"]}
     images = [(base64.b64decode(i["data"]), i["mime"]) for i in job.get("images") or []]
     try:
-        text, tools, error = codex_turn(job.get("session"), job["prompt"], images, job.get("model"), progress, procs.append, env)
+        text, tools, error, usage = codex_turn(job.get("session"), job["prompt"], images, job.get("model"), progress, procs.append, env)
     except Exception as e:
-        text, tools, error = "", [], f"本机运行 tcodex 失败：{e}"
-    report(True, text=text, tools=tools, done=True, error=error, duration_ms=int((time.time() - started) * 1000))
+        text, tools, error, usage = "", [], f"本机运行 tcodex 失败：{e}", {}
+    report(True, text=text, tools=tools, done=True, error=error, duration_ms=int((time.time() - started) * 1000), usage=usage)
 
 
 def run_api(server, token, job, search, proxy):
