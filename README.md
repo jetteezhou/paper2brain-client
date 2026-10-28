@@ -12,7 +12,7 @@
    ~/paper2brain-client/setup.sh https://www.paper2brain.cn <口令>
    ```
 
-   `setup.sh` 问一次 Cursor API key 和快速搜索接口（这台 Mac 上已有单人版 paper2brain 的话直接沿用它的设置）：key 只存在这台 Mac 上，快速搜索接口登记到服务器你自己的论文库里；再把 Cursor worker 和 runner 装成开机自启。可以重复运行；换 key 或接口时删掉 `~/.paper2brain-client/config.json` 里对应的项再运行。
+   `setup.sh` 问一次 Cursor API key 和快速搜索接口（这台 Mac 上已有单人版 paper2brain 的话直接沿用它的设置）：key 只存在这台 Mac 上，快速搜索接口登记到服务器你自己的论文库里；再把 Cursor worker 和 runner 装成开机自启。可以重复运行；换 Cursor key 时删掉 `~/.paper2brain-client/config.json` 里对应的项再运行。换快速搜索接口直接在网页左下角"Agent"设置里改，runner 会写进本机 config 并立即生效（key 不上传保存在服务器）。
 
 ## 里面有什么
 

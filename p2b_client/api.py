@@ -14,6 +14,13 @@ def ready(api):
     return bool(api and api.get("base_url") and api.get("api_key") and api.get("model"))
 
 
+def public(api):
+    """The settings the web form may show; never its key."""
+    api = api or {}
+    return {"base_url": api.get("base_url") or "", "model": api.get("model") or "", "web_model": api.get("web_model") or "",
+            "has_key": bool(api.get("api_key"))}
+
+
 def _open(req, timeout, proxy):
     """proxy (config "proxy", e.g. http://127.0.0.1:7890) or, without one, the system proxy macOS is set to."""
     handlers = [urllib.request.ProxyHandler({"http": proxy, "https": proxy})] if proxy else []

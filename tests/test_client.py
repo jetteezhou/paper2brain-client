@@ -12,7 +12,7 @@ import contextlib  # noqa: E402
 import io  # noqa: E402
 import json  # noqa: E402
 
-from p2b_client import api, codex, cursor, remote  # noqa: E402
+from p2b_client import api, codex, cursor, remote, runner  # noqa: E402
 
 
 def sse(*pairs):
@@ -110,6 +110,21 @@ class Client(unittest.TestCase):
         self.assertEqual((seen["url"], seen["body"]["model"], "thinking" in seen["body"]),
                          ("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-x", False))
         self.assertFalse(api.ready({"base_url": "https://x", "model": "m"}))  # no key: not offered to the server
+
+    def test_web_settings_replace_the_quick_api_on_this_mac(self):
+        path = Path(tempfile.mkdtemp()) / "config.json"
+        path.write_text(json.dumps({"server": "https://x", "search_api": {"base_url": "https://old", "model": "old", "api_key": "old-key"}}))
+        read = lambda: json.loads(path.read_text())  # noqa: E731
+        with mock.patch.object(runner, "CONFIG", path), mock.patch.object(runner, "config", side_effect=read), \
+                mock.patch.object(runner, "_post") as post:
+            runner.run_api("s", "t", {"call_id": "1", "op": "configure", "settings": {"base_url": "https://new", "model": "m", "api_key": "new-key"}}, None, None)
+            self.assertEqual(read()["search_api"]["api_key"], "new-key")
+            runner.run_api("s", "t", {"call_id": "2", "op": "configure", "settings": {"base_url": "https://new", "model": "other", "api_key": ""}}, None, None)
+            self.assertEqual(read()["search_api"], {"base_url": "https://new", "model": "other", "api_key": "new-key"})
+            self.assertEqual(post.call_args[0][3]["result"]["search_api"], {"base_url": "https://new", "model": "other", "web_model": "", "has_key": True})
+            runner.run_api("s", "t", {"call_id": "3", "op": "configure", "settings": {}}, None, None)
+            self.assertNotIn("search_api", read())
+            self.assertEqual(read()["server"], "https://x")
 
 
 if __name__ == "__main__":
