@@ -72,15 +72,21 @@ def run_api(server, token, job, search, proxy):
     """A quick search call or settings update the server waits for: answer it, or say what went wrong."""
     try:
         if job.get("op") == "configure":
-            cfg, settings = config(), job.get("settings") or {}
-            old = cfg.get("search_api") or {}
-            if settings.get("base_url"):
-                cfg["search_api"] = {**settings, "api_key": settings.get("api_key") or old.get("api_key", "")}
+            cfg, settings, which = config(), job.get("settings") or {}, "strong_api" if job.get("which") == "strong_api" else "search_api"
+            old = cfg.get(which) or {}
+            if settings.get("base_url") or (which == "strong_api" and settings.get("model")):
+                cfg[which] = {**settings, "api_key": settings.get("api_key") or old.get("api_key", "")}
             else:
-                cfg.pop("search_api", None)
+                cfg.pop(which, None)
             CONFIG.write_text(json.dumps(cfg, ensure_ascii=False, indent=2))
             os.chmod(CONFIG, 0o600)
-            fields = {"result": {"ok": True, "search_api": api.public(cfg.get("search_api"))}}
+            fields = {"result": {"ok": True, "search_api": api.public(cfg.get("search_api")), "strong_api": api.strong_public(cfg.get("strong_api"))}}
+        elif job.get("op") == "llm":
+            s = api.strong(config())
+            if not s:
+                raise RuntimeError("这台 Mac 没有配置强模型")
+            fields = {"result": api.llm(s, job.get("messages") or [], job.get("tools") or [], job.get("web") is True,
+                                        min(int(job.get("timeout") or 300), 600), proxy)}
         else:
             do = api.web if job.get("op") == "web" else api.chat
             fields = {"result": do(search, str(job.get("prompt") or ""), min(int(job.get("timeout") or 30), 60), proxy)}
@@ -104,7 +110,7 @@ def main():
     busy, lock, models, models_at = [0], threading.Lock(), None, 0.0
     while True:
         search = config().get("search_api")  # the web settings take effect without restarting this runner
-        backends = [b for b in backends if b != "api"] + (["api"] if api.ready(search) else [])
+        backends = [b for b in backends if b != "api"] + (["api"] if api.ready(search) or api.strong(config()) else [])
         if "cursor" in backends and time.time() - models_at > MODELS_EVERY:
             try:
                 models, models_at = cursor.models(key), time.time()
@@ -117,7 +123,8 @@ def main():
         take = [b for b in backends if b in ("api", "config")] if full else backends
         try:
             job = _post(server, token, "/api/runner/claim", {"backends": backends, "take": take, "machine": machine, "models": models,
-                                                             "search_api": api.public(search)}, timeout=60)["job"] if take else time.sleep(1)
+                                                             "search_api": api.public(search),
+                                                             "strong_api": api.strong_public(config().get("strong_api"))}, timeout=60)["job"] if take else time.sleep(1)
         except (urllib.error.URLError, OSError, ValueError, KeyError) as e:
             print(f"{time.strftime('%F %T')} 连不上服务器：{getattr(e, 'reason', e)}，15 秒后重试", flush=True)
             time.sleep(15)
