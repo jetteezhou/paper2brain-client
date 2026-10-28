@@ -12,7 +12,7 @@ import contextlib  # noqa: E402
 import io  # noqa: E402
 import json  # noqa: E402
 
-from p2b_client import api, codex, cursor, remote, runner  # noqa: E402
+from p2b_client import api, bot, codex, cursor, remote, runner  # noqa: E402
 
 
 def sse(*pairs):
@@ -61,6 +61,25 @@ class Client(unittest.TestCase):
         self.assertEqual(seen[0][2], "s-1")
         self.assertTrue((bin_dir / "seen").read_text().strip().endswith("-m m resume s-0 接着说"))
         self.assertTrue((bin_dir / "seen").read_text().startswith("codex-1 "))
+
+    def test_p2bot_runs_in_its_own_folder_without_the_macs_token(self):
+        bin_dir, root = Path(tempfile.mkdtemp()), Path(tempfile.mkdtemp())
+        (bin_dir / "tcodex").write_text(
+            '#!/bin/sh\necho "pwd=$(pwd) tok=${P2B_TOKEN:-none} bot=$P2BOT_TOKEN put=$(command -v p2bot)" > "$(dirname "$0")/seen"\n'
+            'echo \'{"type":"item.completed","item":{"id":"i2","type":"agent_message","text":"做好了"}}\'\n')
+        (bin_dir / "tcodex").chmod(0o755)
+        reports = []
+        job = {"task_id": "abc123", "engine": "tcodex", "prompt": "做个 PPT", "token": "lib.bt-1.s", "inputs": []}
+        with mock.patch.object(codex, "PATH", f"{bin_dir}:/usr/bin:/bin"), mock.patch.object(bot, "PATH", f"{bin_dir}:/usr/bin:/bin"), \
+                mock.patch.object(bot, "ROOT", root), mock.patch.dict(os.environ, {"P2B_TOKEN": "secret"}):
+            bot.run("http://srv", job, lambda force=False, **f: reports.append(f) or True)
+        seen = (bin_dir / "seen").read_text()
+        self.assertRegex(seen, rf"pwd=(/private)?{root / 'abc123'} ")
+        self.assertIn("tok=none bot=lib.bt-1.s", seen)
+        self.assertIn(f"put={root / 'abc123' / 'bin' / 'p2bot'}", seen)
+        self.assertEqual((reports[-1]["text"], reports[-1]["done"]), ("做好了", True))
+        with self.assertRaises(ValueError):
+            bot.folder("../x")
 
 
     def test_cursor_stream_to_its_result(self):

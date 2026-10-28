@@ -4,10 +4,13 @@
 # Mac's proxy; the key and the API settings stay on this Mac (~/.paper2brain-client/config.json).
 # Usage: ./setup.sh <服务器地址> <本机 agent 口令>   (the token comes from the web page's Agent settings)
 #        ./setup.sh --search                       (set the quick search API and its proxy again)
+#        ./setup.sh --bot                          (turn on p2bot: tasks from the web page's p2bot run on this Mac)
 set -e
 cd "$(dirname "$0")"
 RESET_SEARCH=
+BOT=
 [ "$1" = "--search" ] && { RESET_SEARCH=1; shift; }
+[ "$1" = "--bot" ] && { BOT=1; shift; }
 command -v python3 >/dev/null || { echo "缺 python3：xcode-select --install"; exit 1; }
 HOMEDIR="${P2B_CLIENT_HOME:-$HOME/.paper2brain-client}"
 mkdir -p "$HOMEDIR"
@@ -47,7 +50,16 @@ print(json.dumps({'base_url': os.environ['P_URL'].rstrip('/'), 'model': os.envir
 fi
 
 # secrets go through the environment, not the command line other users can see in ps
-P2B_KEY="$KEY" P2B_TOKEN="$TOKEN" P2B_SEARCH="$SEARCH" P2B_PROXY="$PROXY" python3 - "$HOMEDIR/config.json" "$SERVER" "$MACHINE" <<'EOF'
+if [ -n "$BOT" ] || [ "$(mine p2bot)" = "True" ]; then
+  if [ -n "$BOT" ]; then
+    echo "p2bot：网页上 p2bot 发来的任务会在这台 Mac 上执行（不开沙箱：能读写文件、联网、运行命令），工作目录在 ~/p2bot/。"
+    [ "$(ask "确认开启？输入 yes：")" = "yes" ] || { echo "没有开启 p2bot"; BOT=; }
+  else
+    BOT=1
+  fi
+fi
+
+P2B_BOT="$BOT" P2B_KEY="$KEY" P2B_TOKEN="$TOKEN" P2B_SEARCH="$SEARCH" P2B_PROXY="$PROXY" python3 - "$HOMEDIR/config.json" "$SERVER" "$MACHINE" <<'EOF'
 import json, os, sys, urllib.error, urllib.request
 path, server, machine = sys.argv[1:]
 req = urllib.request.Request(f"{server}/api/agent/connect", method="POST", data=b"{}",
@@ -60,7 +72,8 @@ except urllib.error.URLError as e:
     sys.exit(f"连不上 {server}：{e.reason}")
 search = json.loads(os.environ["P2B_SEARCH"]) if os.environ["P2B_SEARCH"] else None
 cfg = {"server": server, "server_token": os.environ["P2B_TOKEN"], "cursor_api_key": os.environ["P2B_KEY"], "machine": machine,
-       **({"search_api": search} if search else {}), **({"proxy": os.environ["P2B_PROXY"]} if os.environ["P2B_PROXY"] else {})}
+       **({"search_api": search} if search else {}), **({"proxy": os.environ["P2B_PROXY"]} if os.environ["P2B_PROXY"] else {}),
+       **({"p2bot": True} if os.environ["P2B_BOT"] else {})}
 with open(path, "w") as f:
     json.dump(cfg, f, ensure_ascii=False, indent=2)
 os.chmod(path, 0o600)
@@ -79,4 +92,5 @@ else
   echo "（没找到 tcodex：要用 TCodex 的模型，装好并 tcodex login 后重启 runner：launchctl kickstart -k gui/$(id -u)/com.paper2brain.runner）"
 fi
 sh ops/install.sh worker runner
+if [ -n "$BOT" ]; then echo "✓ p2bot 已开启：网页个人库里的 p2bot 任务在这台 Mac 的 ~/p2bot/ 下执行。关掉：把 config.json 里的 \"p2bot\" 删掉，再 launchctl kickstart -k gui/$(id -u)/com.paper2brain.runner"; fi
 echo "✓ 好了：网页上的 agent 和快速搜索都在这台 Mac 上运行（Mac 关机时它们不可用，其他功能照常）。"

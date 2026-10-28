@@ -12,7 +12,7 @@ import time
 import urllib.error
 import urllib.request
 
-from . import CONFIG, api, config, cursor, dsh, server_and_token
+from . import CONFIG, api, bot, config, cursor, dsh, server_and_token
 from .codex import codex_turn, tcodex_bin
 
 AT_ONCE = 5  # runs on this Mac at the same time; more wait on the server
@@ -108,9 +108,10 @@ def main():
     if not server or not token:
         sys.exit("还没连上服务器：先运行 ./setup.sh")
     backends = (["cursor"] if key and machine else []) + (["tcodex"] if tcodex_bin() else []) + (["dsh"] if dsh.dsh_bin() else []) \
-        + ["config"] + (["api"] if api.ready(search) else [])
+        + ["config"] + (["api"] if api.ready(search) else []) + (["bot"] if bot.enabled() and bot.engines() else [])
     print(f"{time.strftime('%F %T')} 已连接 {server}，本机可用：{'、'.join(b for b in backends if b != 'config') or '无（缺 Cursor key、tcodex、dsh 和快速搜索接口）'}"
-          + (f"，快速搜索走代理 {proxy}" if proxy and "api" in backends else ""), flush=True)
+          + (f"，快速搜索走代理 {proxy}" if proxy and "api" in backends else "")
+          + (f"，p2bot 已开启（任务在 {bot.ROOT}）" if "bot" in backends else ""), flush=True)
     busy, lock, models, models_at = [0], threading.Lock(), None, 0.0
     while True:
         search = config().get("search_api")  # the web settings take effect without restarting this runner
@@ -132,6 +133,7 @@ def main():
         try:
             job = _post(server, token, "/api/runner/claim", {"backends": backends, "take": take, "machine": machine, "models": models,
                                                              "dsh_models": dsh_models, "search_api": api.public(search),
+                                                             "bot_engines": bot.engines() if "bot" in backends else [],
                                                              "strong_api": api.strong_public(config().get("strong_api"))}, timeout=60)["job"] if take else time.sleep(1)
         except (urllib.error.URLError, OSError, ValueError, KeyError) as e:
             print(f"{time.strftime('%F %T')} 连不上服务器：{getattr(e, 'reason', e)}，15 秒后重试", flush=True)
@@ -145,6 +147,8 @@ def main():
             try:
                 if not run:
                     run_api(server, token, job, search, proxy)
+                elif job["backend"] == "bot":
+                    bot.run(server, job, _reporter(server, token, job))
                 elif job["backend"] == "cursor":
                     run_cursor(server, token, job, key, machine)
                 else:

@@ -12,6 +12,11 @@ from . import REPO
 PATH = os.pathsep.join([os.environ.get("PATH", ""), os.path.expanduser("~/.local/bin"), "/opt/homebrew/bin", "/usr/local/bin"])
 
 
+def _env(env):
+    """None in env removes that variable: p2bot's agent gets none of this Mac's paper2brain token and ids."""
+    return {k: v for k, v in env.items() if v is not None}
+
+
 def tcodex_bin():
     return shutil.which("tcodex", path=PATH)
 
@@ -26,9 +31,9 @@ def _short(args):
     return None
 
 
-def _args(session, text, images, model):
+def _args(session, text, images, model, cwd=REPO):
     # unsandboxed like a Cursor worker: the librarian needs the network and runs ./p2b
-    args = [tcodex_bin() or "tcodex", "exec", "--json", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox", "-C", str(REPO)]
+    args = [tcodex_bin() or "tcodex", "exec", "--json", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox", "-C", str(cwd)]
     if model:
         args += ["-m", model["id"]]
         args += [a for p in model.get("params") or [] if p["id"] == "effort" for a in ("-c", f"model_reasoning_effort={p['value']}")]
@@ -36,7 +41,7 @@ def _args(session, text, images, model):
     return args + (["resume", session, text] if session else [text])
 
 
-def codex_turn(session, text, images, model, progress, started=None, env=None):
+def codex_turn(session, text, images, model, progress, started=None, env=None, cwd=REPO):
     """images: [(bytes, mime)]. progress(text, tools, new session id or None) after each event; started(process) lets
     the caller stop it. Returns (text, tools, error, usage): tokens summed over its turn.completed events."""
     out, tools, error, notice, usage = "", {}, None, None, {}
@@ -47,8 +52,8 @@ def codex_turn(session, text, images, model, progress, started=None, env=None):
             with open(paths[-1], "wb") as f:
                 f.write(data)
         with open(os.path.join(tmp, "stderr"), "w+") as err, \
-                subprocess.Popen(_args(session, text, paths, model), cwd=REPO, stdin=subprocess.DEVNULL,
-                                 env={**os.environ, "PATH": PATH, **(env or {})}, stdout=subprocess.PIPE, stderr=err, text=True,
+                subprocess.Popen(_args(session, text, paths, model, cwd), cwd=cwd, stdin=subprocess.DEVNULL,
+                                 env=_env({**os.environ, "PATH": PATH, **(env or {})}), stdout=subprocess.PIPE, stderr=err, text=True,
                                  start_new_session=True) as p:
             if started:
                 started(p)

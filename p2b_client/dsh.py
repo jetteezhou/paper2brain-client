@@ -10,7 +10,7 @@ import tempfile
 import uuid
 
 from . import REPO
-from .codex import PATH, _short
+from .codex import PATH, _env, _short
 
 DSH_APP = "/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh"  # the desktop app's own CLI
 
@@ -142,7 +142,7 @@ def _pick(model):
     return provider, name, effort
 
 
-def dsh_turn(session, text, images, model, progress, started=None, env=None):
+def dsh_turn(session, text, images, model, progress, started=None, env=None, cwd=REPO):
     """Same contract as codex_turn: images [(bytes, mime)], progress(text, tools, new session id or None),
     started(process); returns (text, tools, error, usage). Unsandboxed like TCodex (DSH_PERMISSION_MODE), on the
     desktop app's settings with the stored sign-ins turned back on; model "provider/model" or "default"."""
@@ -178,8 +178,8 @@ def dsh_turn(session, text, images, model, progress, started=None, env=None):
         args = [dsh_bin() or "dsh", "--profile", "headless", *(["--patch", desktop] if desktop else []), "--patch", patch,
                 "--json"] + (["--session-id", session] if session else []) + ["-"]
         with open(os.path.join(tmp, "stderr"), "w+") as err, \
-                subprocess.Popen(args, cwd=REPO, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err, text=True,
-                                 env={**os.environ, "PATH": PATH, "DSH_PERMISSION_MODE": "danger-full-access", **(env or {})},
+                subprocess.Popen(args, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err, text=True,
+                                 env=_env({**os.environ, "PATH": PATH, "DSH_PERMISSION_MODE": "danger-full-access", **(env or {})}),
                                  start_new_session=True) as p:
             if started:
                 started(p)
