@@ -127,5 +127,26 @@ class Client(unittest.TestCase):
             self.assertEqual(read()["server"], "https://x")
 
 
+class DeepSeekHarness(unittest.TestCase):
+    PATCH = ("- id: llm-pi-ai\n  config:\n    providers:\n      venus-responses:\n        models:\n          - id: gpt-6.1-sol\n"
+             "            reasoningEfforts:\n              off: null\n              medium: medium\n          - id: plain\n"
+             "- id: agent-default-model\n  name: \"@deepseek-ai/dsh-agent-default-model\"\n  config:\n"
+             "    provider: venus-responses\n    model: gpt-6.1-sol\n")
+
+    def test_models_and_the_effort_sent_by_default(self):
+        from p2b_client import dsh
+        with tempfile.TemporaryDirectory() as home:
+            prof = Path(home) / "profiles" / "desktop"
+            prof.mkdir(parents=True)
+            (prof / "cordis.patch.yml").write_text(self.PATCH)
+            with mock.patch.dict(os.environ, {"DSH_HOME": home}):
+                self.assertEqual([m["id"] for m in dsh.models()], ["default", "venus-responses/gpt-6.1-sol", "venus-responses/plain"])
+                # dsh's own default sends effort "none", which gpt-5+ refuse: medium when offered, else left out
+                self.assertEqual(dsh._pick({"id": "default"}), ("venus-responses", "gpt-6.1-sol", "medium"))
+                self.assertEqual(dsh._pick({"id": "venus-responses/plain"}), ("venus-responses", "plain", None))
+                self.assertEqual(dsh._pick({"id": "venus-responses/gpt-6.1-sol", "params": [{"id": "effort", "value": "off"}]}),
+                                 ("venus-responses", "gpt-6.1-sol", "off"))
+
+
 if __name__ == "__main__":
     unittest.main()

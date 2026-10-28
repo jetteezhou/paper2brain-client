@@ -12,7 +12,7 @@ import time
 import urllib.error
 import urllib.request
 
-from . import CONFIG, api, config, cursor, server_and_token
+from . import CONFIG, api, config, cursor, dsh, server_and_token
 from .codex import codex_turn, tcodex_bin
 
 AT_ONCE = 5  # runs on this Mac at the same time; more wait on the server
@@ -53,7 +53,9 @@ def run_cursor(server, token, job, key, machine):
 
 
 def run_codex(server, token, job):
+    """A TCodex or DeepSeek Harness run: one turn here, its ./p2b sent back to the server."""
     report, procs, started = _reporter(server, token, job), [], time.time()
+    is_dsh = job["backend"] == "dsh"
 
     def progress(text, tools, session):
         if not report(bool(session), text=text, tools=tools, session=session) and procs:
@@ -62,9 +64,10 @@ def run_codex(server, token, job):
     env = {"P2B_SERVER": server, "P2B_TOKEN": token, "P2B_AGENT_ID": job["agent_id"], "P2B_LIBRARY": job["library"]}
     images = [(base64.b64decode(i["data"]), i["mime"]) for i in job.get("images") or []]
     try:
-        text, tools, error, usage = codex_turn(job.get("session"), job["prompt"], images, job.get("model"), progress, procs.append, env)
+        text, tools, error, usage = (dsh.dsh_turn if is_dsh else codex_turn)(job.get("session"), job["prompt"], images, job.get("model"),
+                                                                              progress, procs.append, env)
     except Exception as e:
-        text, tools, error, usage = "", [], f"本机运行 tcodex 失败：{e}", {}
+        text, tools, error, usage = "", [], f"本机运行 {'dsh' if is_dsh else 'tcodex'} 失败：{e}", {}
     report(True, text=text, tools=tools, done=True, error=error, duration_ms=int((time.time() - started) * 1000), usage=usage)
 
 
@@ -104,8 +107,9 @@ def main():
     key, machine, search, proxy = cfg.get("cursor_api_key"), cfg.get("machine"), cfg.get("search_api"), cfg.get("proxy")
     if not server or not token:
         sys.exit("还没连上服务器：先运行 ./setup.sh")
-    backends = (["cursor"] if key and machine else []) + (["tcodex"] if tcodex_bin() else []) + ["config"] + (["api"] if api.ready(search) else [])
-    print(f"{time.strftime('%F %T')} 已连接 {server}，本机可用：{'、'.join(b for b in backends if b != 'config') or '无（缺 Cursor key、tcodex 和快速搜索接口）'}"
+    backends = (["cursor"] if key and machine else []) + (["tcodex"] if tcodex_bin() else []) + (["dsh"] if dsh.dsh_bin() else []) \
+        + ["config"] + (["api"] if api.ready(search) else [])
+    print(f"{time.strftime('%F %T')} 已连接 {server}，本机可用：{'、'.join(b for b in backends if b != 'config') or '无（缺 Cursor key、tcodex、dsh 和快速搜索接口）'}"
           + (f"，快速搜索走代理 {proxy}" if proxy and "api" in backends else ""), flush=True)
     busy, lock, models, models_at = [0], threading.Lock(), None, 0.0
     while True:
@@ -117,13 +121,17 @@ def main():
             except Exception as e:
                 print(f"{time.strftime('%F %T')} 读不到 Cursor 模型列表：{e}", flush=True)
                 models_at = time.time() - MODELS_EVERY + 60
+        try:  # read each time: models added in the desktop app show up without restarting this runner
+            dsh_models = dsh.models() if "dsh" in backends else []
+        except OSError:
+            dsh_models = []
         with lock:
             full = busy[0] >= AT_ONCE
         # full of runs: keep asking, but only for search calls and settings, which are short and someone is waiting on
         take = [b for b in backends if b in ("api", "config")] if full else backends
         try:
             job = _post(server, token, "/api/runner/claim", {"backends": backends, "take": take, "machine": machine, "models": models,
-                                                             "search_api": api.public(search),
+                                                             "dsh_models": dsh_models, "search_api": api.public(search),
                                                              "strong_api": api.strong_public(config().get("strong_api"))}, timeout=60)["job"] if take else time.sleep(1)
         except (urllib.error.URLError, OSError, ValueError, KeyError) as e:
             print(f"{time.strftime('%F %T')} 连不上服务器：{getattr(e, 'reason', e)}，15 秒后重试", flush=True)
