@@ -147,6 +147,20 @@ class DeepSeekHarness(unittest.TestCase):
                 self.assertEqual(dsh._pick({"id": "venus-responses/gpt-6.1-sol", "params": [{"id": "effort", "value": "off"}]}),
                                  ("venus-responses", "gpt-6.1-sol", "off"))
 
+    def test_venus_routes_get_sticky_routing_and_claude_prompt_cache(self):
+        from p2b_client import dsh
+        text = ("- id: llm-pi-ai\n  config:\n    providers:\n      venus:\n        api: openai-completions\n        baseURL: http://v2.open.venus.oa.com/llmproxy\n"
+                "        models:\n          - id: claude-opus-5-5\n          - id: kimi\n"
+                "      venus-responses:\n        api: openai-responses\n        baseURL: http://v2.open.venus.oa.com/llmproxy/v1\n"
+                "      openai:\n        api: openai-responses\n        baseURL: https://api.openai.com/v1\n")
+        got = dsh._venus_patch(text, "dsh-1")
+        self.assertEqual(got, text
+                         .replace("      venus:\n", '      venus:\n        headers:\n          Venus-Session-Id: "dsh-1"\n')
+                         .replace("          - id: claude-opus-5-5\n", "          - id: claude-opus-5-5\n            compat:\n              cacheControlFormat: anthropic\n")
+                         .replace("      venus-responses:\n", '      venus-responses:\n        headers:\n          Venus-Session-Id: "dsh-1"\n          Venus-Codex-Routing: "true"\n'))
+        self.assertIs(dsh._venus_patch(got, "dsh-1"), got)  # already there: the file is used as is
+        self.assertIs(dsh._venus_patch("- id: ui-chat\n", "dsh-1"), "- id: ui-chat\n")
+
 
 if __name__ == "__main__":
     unittest.main()

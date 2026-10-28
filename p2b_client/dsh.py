@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import uuid
 
 from . import REPO
 from .codex import PATH, _short
@@ -64,6 +65,64 @@ def _pi_ai_models(text):
     return out
 
 
+# Venus spreads requests over several upstreams; Venus-Session-Id (its sticky routing, which beats Venus-Sticky-Routing)
+# keeps one conversation on one, so its prompt cache stays warm and, on the Responses API, the reasoning items dsh
+# replays each tool turn (store: false) can be decrypted (another upstream answers 400 invalid_encrypted_content).
+# Sticky routing costs concurrency: dsh's own retry (5 tries on 429 / 5xx / timeouts, with backoff) covers that.
+
+
+def _venus_patch(text, session=None):
+    """The desktop settings with Venus' own settings added on each Venus provider (venus in its baseURL): the headers
+    Venus-Session-Id: session (when given) and, on the Responses API, Venus-Codex-Routing: true; and Anthropic
+    cache_control (system prompt, last tool, last message) on its Claude models on chat completions, since Venus
+    caches those only when asked. What the file already sets is kept; text itself when nothing changes.
+    ponytail: block-style YAML as the app writes it, like _pi_ai_models; an inline `headers: {...}` is left alone."""
+    lines, blocks, entry, providers, cur, sub = text.splitlines(), [], False, None, None, None
+    for i, line in enumerate(lines):
+        s, indent = line.strip(), len(line) - len(line.lstrip())
+        if not s or s.startswith("#"):
+            continue
+        if indent == 0:
+            entry, providers, cur = s == "- id: llm-pi-ai", None, None
+        elif not entry:
+            continue
+        elif s == "providers:":
+            providers = indent
+        elif providers is not None and indent <= providers:
+            providers = cur = None
+        elif providers is not None and indent == providers + 2 and s.endswith(":"):
+            cur, sub = {"at": i, "indent": indent + 2, "props": {}, "headers": set(), "models": []}, None
+            blocks.append(cur)
+        elif cur and indent == cur["indent"] and ":" in s:
+            k, _, v = s.partition(":")
+            sub = k.strip()
+            cur["props"][sub] = (i, v.strip().strip("'\""))
+        elif cur and sub == "headers" and indent == cur["indent"] + 2:
+            cur["headers"].add(s.partition(":")[0].strip("'\""))
+        elif cur and sub == "models" and s.startswith("- id:"):
+            cur["models"].append({"at": i, "indent": indent + 2, "id": s[5:].strip().strip("'\""), "compat": False})
+        elif cur and sub == "models" and cur["models"] and indent == cur["models"][-1]["indent"] and s.startswith("compat:"):
+            cur["models"][-1]["compat"] = True
+    inserts = []
+    for b in blocks:
+        p, pad = b["props"], " " * b["indent"]
+        if "venus" not in p.get("baseURL", (0, ""))[1]:
+            continue
+        api = p.get("api", (0, ""))[1]
+        want = {**({"Venus-Session-Id": session} if session else {}), **({"Venus-Codex-Routing": "true"} if api == "openai-responses" else {})}
+        add = [f"{pad}  {k}: {json.dumps(v)}" for k, v in want.items() if k not in b["headers"]]
+        if add and "headers" not in p:
+            inserts.append((b["at"] + 1, [f"{pad}headers:"] + add))
+        elif add and not p["headers"][1]:
+            inserts.append((p["headers"][0] + 1, add))
+        if api == "openai-completions":
+            inserts += [(m["at"] + 1, [" " * m["indent"] + "compat:", " " * m["indent"] + "  cacheControlFormat: anthropic"])
+                        for m in b["models"] if "claude" in m["id"].lower() and not m["compat"]]
+    for at, new in sorted(inserts, key=lambda x: x[0], reverse=True):  # from the end, so earlier line numbers stay right
+        lines[at:at] = new
+    return "\n".join(lines) + "\n" if inserts else text
+
+
 def _pick(model):
     """(provider, model, effort) to run: "default" is the model picked in the desktop app; with no effort chosen, medium
     when the model offers it, since dsh's own default sends "none", which OpenAI's gpt-5+ refuse."""
@@ -105,6 +164,17 @@ def dsh_turn(session, text, images, model, progress, started=None, env=None):
         with open(patch, "w") as f:
             json.dump(overlay, f)  # JSON is YAML, so the loader takes it as a patch list
         desktop = _desktop_patch()
+        try:  # a copy with Venus' settings (_venus_patch); the app's own file is never written
+            with open(desktop, encoding="utf-8") as f:
+                settings = f.read()
+        except (OSError, TypeError):
+            settings = None  # no file, or unreadable: passed as is, dsh reports it
+        # one Venus session per agent, so its follow-ups land where the cache is; a turn without one still stays put
+        sticky = (env or {}).get("P2B_AGENT_ID") or session or f"dsh-{uuid.uuid4()}"
+        if settings is not None and (venus := _venus_patch(settings, sticky)) is not settings:
+            desktop = os.path.join(tmp, "desktop.patch.yml")
+            with open(desktop, "w", encoding="utf-8") as f:
+                f.write(venus)
         args = [dsh_bin() or "dsh", "--profile", "headless", *(["--patch", desktop] if desktop else []), "--patch", patch,
                 "--json"] + (["--session-id", session] if session else []) + ["-"]
         with open(os.path.join(tmp, "stderr"), "w+") as err, \
