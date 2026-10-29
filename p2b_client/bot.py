@@ -4,6 +4,7 @@ environment; only a short-lived token of this one turn, with which the agent's `
 Off until ./setup.sh --bot turns it on ("p2bot": true in the config)."""
 import json
 import os
+import re
 import shlex
 import socket
 import subprocess
@@ -86,18 +87,18 @@ def run(server, job, report):
     report(True, text=text, tools=tools, done=True, error=error, duration_ms=int((time.time() - started) * 1000), usage=usage)
 
 
-TOOL_CMDS = ("scan", "apply", "undo")
+TOOL_CMD = re.compile(r"[a-z]{2,20}")  # a subcommand of the script the server ships with the turn; new ones need no client update
 TOOL_TIMEOUT = 900
 
 
 def run_tool(server, job, report):
-    """Scan, apply a confirmed plan, or undo it: `python3 inputs/p2b-tools.py <argv>` in a scratch folder, no model and
-    no shell; the JSON it writes goes back as the turn's result."""
+    """Scan, apply a confirmed plan, undo it, make previews…: `python3 inputs/p2b-tools.py <argv>` in a scratch folder,
+    no model and no shell; the JSON it writes goes back as the turn's result."""
     started, spec = time.time(), job["tool"]
     argv, out = [str(a) for a in spec.get("argv") or []], Path(str(spec.get("out") or "")).name
     text, result, error = "", None, None
     try:
-        if not argv or argv[0] not in TOOL_CMDS or not out:
+        if not argv or not TOOL_CMD.fullmatch(argv[0]) or not out:
             raise RuntimeError(f"不认识的工具任务：{argv[:1]}")
         with tempfile.TemporaryDirectory(prefix="p2bot-tool-") as tmp:
             (Path(tmp) / "inputs").mkdir()

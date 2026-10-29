@@ -111,7 +111,7 @@ class Client(unittest.TestCase):
             bot.run("http://srv", job, lambda force=False, **f: reports.append(f) or True)
             self.assertEqual((reports[-1]["error"], reports[-1]["result"]), (None, {"cmd": "apply", "tok": "none", "plan": {"id": "p1"}}))
             self.assertIn("条完成", reports[-1]["text"])
-            bot.run("http://srv", {**job, "tool": {"argv": ["rm", "-rf"], "out": "r.json"}}, lambda force=False, **f: reports.append(f) or True)
+            bot.run("http://srv", {**job, "tool": {"argv": ["../evil"], "out": "r.json"}}, lambda force=False, **f: reports.append(f) or True)
         self.assertIn("不认识的工具任务", reports[-1]["error"])
         self.assertIsNone(reports[-1]["result"])
 
