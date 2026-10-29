@@ -64,20 +64,35 @@ class Client(unittest.TestCase):
 
     def test_p2bot_runs_in_its_own_folder_without_the_macs_token(self):
         bin_dir, root = Path(tempfile.mkdtemp()), Path(tempfile.mkdtemp())
+        # as Codex runs its agent's commands: with nothing named like a token or key left in the environment
         (bin_dir / "tcodex").write_text(
-            '#!/bin/sh\necho "pwd=$(pwd) tok=${P2B_TOKEN:-none} bot=$P2BOT_TOKEN put=$(command -v p2bot)" > "$(dirname "$0")/seen"\n'
+            '#!/bin/sh\necho "pwd=$(pwd) tok=${P2B_TOKEN:-none} put=$(command -v p2bot)" > "$(dirname "$0")/seen"\n'
+            'echo hi > out.txt && env -i PATH="$PATH" p2bot put out.txt >> "$(dirname "$0")/seen" 2>&1\n'
             'echo \'{"type":"item.completed","item":{"id":"i2","type":"agent_message","text":"做好了"}}\'\n')
         (bin_dir / "tcodex").chmod(0o755)
-        reports = []
+        reports, puts = [], []
+
+        def urlopen(req, timeout):
+            puts.append((req.full_url, req.headers["Authorization"]))
+            return io.BytesIO(json.dumps({"name": "out.txt", "size": 3}).encode())
+
         job = {"task_id": "abc123", "engine": "tcodex", "prompt": "做个 PPT", "token": "lib.bt-1.s", "inputs": []}
         with mock.patch.object(codex, "PATH", f"{bin_dir}:/usr/bin:/bin"), mock.patch.object(bot, "PATH", f"{bin_dir}:/usr/bin:/bin"), \
                 mock.patch.object(bot, "ROOT", root), mock.patch.dict(os.environ, {"P2B_TOKEN": "secret"}):
             bot.run("http://srv", job, lambda force=False, **f: reports.append(f) or True)
         seen = (bin_dir / "seen").read_text()
         self.assertRegex(seen, rf"pwd=(/private)?{root / 'abc123'} ")
-        self.assertIn("tok=none bot=lib.bt-1.s", seen)
+        self.assertIn("tok=none", seen)
         self.assertIn(f"put={root / 'abc123' / 'bin' / 'p2bot'}", seen)
+        self.assertNotIn("只能在 p2bot", seen)
         self.assertEqual((reports[-1]["text"], reports[-1]["done"]), ("做好了", True))
+        # what bin/p2bot hands to `p2bot put`, without any environment of its own
+        env = dict(line.split("=", 1) for line in (root / "abc123" / "bin" / "p2bot").read_text().split("\n")[1].split(" ")[:2])
+        with mock.patch.dict(os.environ, {k: v.strip("'") for k, v in env.items()}), mock.patch.object(bot.urllib.request, "urlopen", urlopen), \
+                contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as done:
+            bot.put([str(root / "abc123" / "out.txt")])
+        self.assertEqual(done.exception.code, 0)
+        self.assertEqual(puts, [("http://srv/api/bot/run/put?name=out.txt", "Bearer lib.bt-1.s")])
         with self.assertRaises(ValueError):
             bot.folder("../x")
 

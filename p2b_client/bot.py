@@ -4,6 +4,7 @@ environment; only a short-lived token of this one turn, with which the agent's `
 Off until ./setup.sh --bot turns it on ("p2bot": true in the config)."""
 import json
 import os
+import shlex
 import sys
 import time
 import urllib.error
@@ -28,15 +29,18 @@ def engines():
     return (["tcodex"] if tcodex_bin() else []) + (["dsh"] if dsh.dsh_bin() else [])
 
 
-def folder(task_id):
+def folder(task_id, server="", token=""):
+    """The task's folder, with bin/p2bot carrying this turn's server and token: Codex strips variables named like
+    *TOKEN* / *KEY* from the commands its agent runs, so they cannot go through the environment."""
     if not task_id.isalnum():
         raise ValueError(f"bad task id: {task_id!r}")
     path = ROOT / task_id
     (path / "inputs").mkdir(parents=True, exist_ok=True)
     (path / "bin").mkdir(exist_ok=True)
     tool = path / "bin" / "p2bot"
-    tool.write_text(f'#!/bin/sh\nPYTHONPATH="{REPO}" exec python3 -m p2b_client.bot "$@"\n')
-    tool.chmod(0o755)
+    tool.write_text(f'#!/bin/sh\nP2BOT_SERVER={shlex.quote(server)} P2BOT_TURN={shlex.quote(token)} '
+                    f'PYTHONPATH={shlex.quote(str(REPO))} exec python3 -m p2b_client.bot "$@"\n')
+    tool.chmod(0o700)
     return path
 
 
@@ -51,12 +55,12 @@ def run(server, job, report):
     """One turn: fetch the attachments, run the engine in the task's folder, report as the other runs do."""
     from . import dsh
     started, procs = time.time(), []
-    here = folder(job["task_id"])
+    here = folder(job["task_id"], server, job["token"])
     for f in job.get("inputs") or []:
         dst = here / "inputs" / Path(f["name"]).name
         if not dst.exists() or dst.stat().st_size != f["size"]:
             _get(server, job["token"], f"/api/bot/run/inputs/{f['id']}", dst)
-    env = {**{k: None for k in HIDDEN}, "P2BOT_SERVER": server, "P2BOT_TOKEN": job["token"], "PATH": f"{here / 'bin'}{os.pathsep}{PATH}"}
+    env = {**{k: None for k in HIDDEN}, "PATH": f"{here / 'bin'}{os.pathsep}{PATH}"}
 
     def progress(text, tools, session):
         if not report(bool(session), text=text, tools=tools, session=session) and procs:
@@ -74,9 +78,9 @@ def run(server, job, report):
 # ---------- `p2bot put <file> ...`, what the agent runs ----------
 
 def put(paths):
-    server, token = os.environ.get("P2BOT_SERVER", "").rstrip("/"), os.environ.get("P2BOT_TOKEN", "")
+    server, token = os.environ.get("P2BOT_SERVER", "").rstrip("/"), os.environ.get("P2BOT_TURN", "")
     if not server or not token:
-        sys.exit("p2bot put 只能在 p2bot 的任务里用（缺 P2BOT_SERVER / P2BOT_TOKEN）")
+        sys.exit("p2bot put 只能在 p2bot 的任务目录里用（用 PATH 里的 p2bot，即任务目录下的 bin/p2bot）")
     out, failed = [], False
     for p in paths:
         path = Path(p)
