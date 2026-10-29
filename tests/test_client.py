@@ -96,6 +96,25 @@ class Client(unittest.TestCase):
         with self.assertRaises(ValueError):
             bot.folder("../x")
 
+    def test_a_tool_turn_runs_the_servers_script_without_a_model(self):
+        script = ("import json, sys, os\nout = sys.argv[sys.argv.index('--out') + 1]\n"
+                  "json.dump({'cmd': sys.argv[1], 'tok': os.environ.get('P2B_TOKEN', 'none'), 'plan': json.load(open('inputs/p.json'))}, open(out, 'w'))\n"
+                  "print('1/1 条完成')\n")
+        files = {"t1": script, "t2": json.dumps({"id": "p1"})}
+
+        def fetch(server, token, path, dst):
+            Path(dst).write_text(files[path.rsplit("/", 1)[1]])
+        reports = []
+        job = {"task_id": "abc", "token": "lib.bt-2.s", "inputs": [{"id": "t1", "name": "p2b-tools.py"}, {"id": "t2", "name": "p.json"}],
+               "tool": {"argv": ["apply", "--plan", "inputs/p.json", "--out", "r.json"], "out": "r.json"}}
+        with mock.patch.object(bot, "_get", fetch), mock.patch.dict(os.environ, {"P2B_TOKEN": "secret"}):
+            bot.run("http://srv", job, lambda force=False, **f: reports.append(f) or True)
+            self.assertEqual((reports[-1]["error"], reports[-1]["result"]), (None, {"cmd": "apply", "tok": "none", "plan": {"id": "p1"}}))
+            self.assertIn("条完成", reports[-1]["text"])
+            bot.run("http://srv", {**job, "tool": {"argv": ["rm", "-rf"], "out": "r.json"}}, lambda force=False, **f: reports.append(f) or True)
+        self.assertIn("不认识的工具任务", reports[-1]["error"])
+        self.assertIsNone(reports[-1]["result"])
+
 
     def test_cursor_stream_to_its_result(self):
         stream = sse(("status", '{"status":"RUNNING"}'), ("assistant", '{"text":"答"}'),

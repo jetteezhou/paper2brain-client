@@ -5,7 +5,10 @@ Off until ./setup.sh --bot turns it on ("p2bot": true in the config)."""
 import json
 import os
 import shlex
+import socket
+import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -22,6 +25,11 @@ HIDDEN = ("P2B_TOKEN", "P2B_SERVER", "P2B_AGENT_ID", "P2B_LIBRARY", "CURSOR_API_
 
 def enabled():
     return config().get("p2bot") is True
+
+
+def machine():
+    """This Mac's name on the p2bot page: the worker's name from setup.sh, else the host's."""
+    return config().get("machine") or socket.gethostname().split(".")[0]
 
 
 def engines():
@@ -52,7 +60,10 @@ def _get(server, token, path, dst):
 
 
 def run(server, job, report):
-    """One turn: fetch the attachments, run the engine in the task's folder, report as the other runs do."""
+    """One turn: fetch the attachments, run the engine in the task's folder, report as the other runs do. A tool turn
+    (job["tool"]) has no engine: the runner runs the server's script itself."""
+    if job.get("tool"):
+        return run_tool(server, job, report)
     from . import dsh
     started, procs = time.time(), []
     here = folder(job["task_id"], server, job["token"])
@@ -73,6 +84,36 @@ def run(server, job, report):
     except Exception as e:
         text, tools, error, usage = "", [], f"本机运行 p2bot 失败：{e}", {}
     report(True, text=text, tools=tools, done=True, error=error, duration_ms=int((time.time() - started) * 1000), usage=usage)
+
+
+TOOL_CMDS = ("scan", "apply", "undo")
+TOOL_TIMEOUT = 900
+
+
+def run_tool(server, job, report):
+    """Scan, apply a confirmed plan, or undo it: `python3 inputs/p2b-tools.py <argv>` in a scratch folder, no model and
+    no shell; the JSON it writes goes back as the turn's result."""
+    started, spec = time.time(), job["tool"]
+    argv, out = [str(a) for a in spec.get("argv") or []], Path(str(spec.get("out") or "")).name
+    text, result, error = "", None, None
+    try:
+        if not argv or argv[0] not in TOOL_CMDS or not out:
+            raise RuntimeError(f"不认识的工具任务：{argv[:1]}")
+        with tempfile.TemporaryDirectory(prefix="p2bot-tool-") as tmp:
+            (Path(tmp) / "inputs").mkdir()
+            for f in job.get("inputs") or []:
+                _get(server, job["token"], f"/api/bot/run/inputs/{f['id']}", Path(tmp) / "inputs" / Path(f["name"]).name)
+            p = subprocess.run([sys.executable, "inputs/p2b-tools.py", *argv], cwd=tmp, capture_output=True, text=True,
+                               timeout=TOOL_TIMEOUT, env={k: v for k, v in os.environ.items() if k not in HIDDEN})
+            text = (p.stdout.strip() or p.stderr.strip())[-2000:]
+            if p.returncode:
+                raise RuntimeError(p.stderr.strip()[-500:] or f"退出码 {p.returncode}")
+            result = json.loads((Path(tmp) / out).read_text())
+    except subprocess.TimeoutExpired:
+        error = f"脚本超过 {TOOL_TIMEOUT // 60} 分钟，停了"
+    except Exception as e:
+        error = f"本机运行 p2b-tools 失败：{e}"
+    report(True, text=text, tools=[], done=True, error=error, result=result, duration_ms=int((time.time() - started) * 1000))
 
 
 # ---------- `p2bot put <file> ...`, what the agent runs ----------

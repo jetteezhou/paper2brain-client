@@ -22,7 +22,8 @@
 cd ~/paper2brain-client && git pull && ./setup.sh --bot
 ```
 
-- 只跑 TCodex 或 DeepSeek Harness；每个任务一个工作目录 `~/p2bot/<任务>/`（附件在 `inputs/`），追问还在同一个目录里、接着同一个会话。
+- 扫描项目、照网页上确认过的计划挪文件、撤销：runner 直接运行服务器下发的 `p2b-tools.py`（临时目录里，不经过模型、不花 token）。
+- 任务只跑 TCodex 或 DeepSeek Harness；每个任务一个工作目录 `~/p2bot/<任务>/`（附件在 `inputs/`），追问还在同一个目录里、接着同一个会话。
 - 和论文库隔离：不在本仓库目录里运行，读不到 `librarian/`，环境里没有本机的 paper2brain 口令（`P2B_TOKEN` 等），只有这一轮专用的上传口令，这一轮结束后就失效；agent 用 `p2bot put <文件>` 交付。
 - **不开沙箱**：agent 能读写这台 Mac 上的文件、联网、运行命令。规范要求它不碰 `~/paper2brain*` 和各种口令，但这只是规范，不是硬隔离。
 - 关掉：删掉 `~/.paper2brain-client/config.json` 里的 `"p2bot": true`，再 `launchctl kickstart -k gui/$(id -u)/com.paper2brain.runner`。

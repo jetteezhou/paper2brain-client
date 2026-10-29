@@ -134,6 +134,7 @@ def main():
             job = _post(server, token, "/api/runner/claim", {"backends": backends, "take": take, "machine": machine, "models": models,
                                                              "dsh_models": dsh_models, "search_api": api.public(search),
                                                              "bot_engines": bot.engines() if "bot" in backends else [],
+                                                             "bot_tools": "bot" in backends, "bot_machine": bot.machine(),
                                                              "strong_api": api.strong_public(config().get("strong_api"))}, timeout=60)["job"] if take else time.sleep(1)
         except (urllib.error.URLError, OSError, ValueError, KeyError) as e:
             print(f"{time.strftime('%F %T')} 连不上服务器：{getattr(e, 'reason', e)}，15 秒后重试", flush=True)
