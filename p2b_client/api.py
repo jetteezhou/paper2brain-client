@@ -31,10 +31,12 @@ def _google(api):
     return urllib.parse.urlparse(api["base_url"]).hostname == "generativelanguage.googleapis.com"
 
 
-def chat(api, prompt, timeout=30, proxy=None):
+def chat(api, prompt, timeout=30, proxy=None, images=()):
+    """images: pictures sent along (data URLs), as OpenAI image_url parts."""
+    content = [{"type": "text", "text": prompt}, *({"type": "image_url", "image_url": {"url": u}} for u in images)] if images else prompt
     req = urllib.request.Request(api["base_url"].rstrip("/") + "/chat/completions", method="POST", headers={
         "Authorization": f"Bearer {api['api_key']}", "Content-Type": "application/json"}, data=json.dumps({
-            "model": api["model"], "messages": [{"role": "user", "content": prompt}],
+            "model": api["model"], "messages": [{"role": "user", "content": content}],
             **({} if _google(api) else {"thinking": {"type": "disabled"}})}).encode())  # Google rejects the unknown field
     try:
         with _open(req, timeout, proxy) as r:

@@ -90,9 +90,11 @@ def run_api(server, token, job, search, proxy):
                 raise RuntimeError("这台 Mac 没有配置强模型")
             fields = {"result": api.llm(s, job.get("messages") or [], job.get("tools") or [], job.get("web") is True,
                                         min(int(job.get("timeout") or 300), 600), proxy)}
+        elif job.get("op") == "web":
+            fields = {"result": api.web(search, str(job.get("prompt") or ""), min(int(job.get("timeout") or 30), 60), proxy)}
         else:
-            do = api.web if job.get("op") == "web" else api.chat
-            fields = {"result": do(search, str(job.get("prompt") or ""), min(int(job.get("timeout") or 30), 60), proxy)}
+            pics = [u for u in job.get("images") or [] if isinstance(u, str) and u.startswith("data:image/")][:3]
+            fields = {"result": api.chat(search, str(job.get("prompt") or ""), min(int(job.get("timeout") or 30), 60), proxy, pics)}
     except Exception as e:
         fields = {"error": str(e)}
     try:

@@ -1,3 +1,5 @@
 __pycache__/
 # fetched from the server by ./p2b guide; it changes with the server, not with this repo
 librarian/
+# swift build output of mac/ (the 随手记 app)
+mac/.build/

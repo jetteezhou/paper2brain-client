@@ -164,6 +164,22 @@ class Client(unittest.TestCase):
                          ("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-x", False))
         self.assertFalse(api.ready({"base_url": "https://x", "model": "m"}))  # no key: not offered to the server
 
+    def test_pictures_go_along_with_a_quick_call(self):
+        g = {"base_url": "https://x", "model": "m", "api_key": "k"}
+        with mock.patch.object(runner, "_post") as post, mock.patch.object(runner.api, "chat", return_value={"text": "ok"}) as chat:
+            runner.run_api("s", "t", {"call_id": "1", "op": "chat", "prompt": "看图", "images": ["data:image/jpeg;base64,AA", "file:///etc/passwd"]}, g, None)
+        self.assertEqual(chat.call_args[0][4], ["data:image/jpeg;base64,AA"])  # only pictures, nothing else rides along
+        self.assertEqual(post.call_args[0][3]["result"], {"text": "ok"})
+        sent = {}
+
+        class Opener:
+            def open(self, req, timeout):
+                sent.update(json.loads(req.data))
+                return contextlib.nullcontext(io.BytesIO(json.dumps({"choices": [{"message": {"content": "x"}}]}).encode()))
+        with mock.patch.object(api.urllib.request, "build_opener", lambda *h: Opener()):
+            api.chat(g, "看图", 30, None, ["data:image/jpeg;base64,AA"])
+        self.assertEqual(sent["messages"][0]["content"][1], {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AA"}})
+
     def test_web_settings_replace_the_quick_api_on_this_mac(self):
         path = Path(tempfile.mkdtemp()) / "config.json"
         path.write_text(json.dumps({"server": "https://x", "search_api": {"base_url": "https://old", "model": "old", "api_key": "old-key"}}))

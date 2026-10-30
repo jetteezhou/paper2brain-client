@@ -17,4 +17,4 @@ for name in ${*:-worker runner}; do
   sed -e "s#REPO#$REPO#g" -e "s#HOMEDIR#$HOME#g" "$REPO/ops/$label.plist" > "$AGENTS/$label.plist"
   launchctl bootstrap "gui/$(id -u)" "$AGENTS/$label.plist"
 done
-echo "已安装：${*:-worker runner}（日志 /tmp/paper2brain-worker.log、/tmp/paper2brain-runner.log）"
+echo "已安装：${*:-worker runner}（日志在 /tmp/paper2brain-*.log）"

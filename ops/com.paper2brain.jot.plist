@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Starts p2b 随手记 (mac/build.sh) at login; quitting it from its menu keeps it quit until the next login. HOMEDIR is replaced on install; see ops/install.sh. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.paper2brain.jot</string>
+  <key>ProgramArguments</key>
+  <array><string>HOMEDIR/Applications/p2b-jot.app/Contents/MacOS/P2BJot</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>LimitLoadToSessionType</key><string>Aqua</string>
+  <key>ThrottleInterval</key><integer>15</integer>
+  <key>StandardOutPath</key><string>/tmp/paper2brain-jot.log</string>
+  <key>StandardErrorPath</key><string>/tmp/paper2brain-jot.log</string>
+</dict>
+</plist>

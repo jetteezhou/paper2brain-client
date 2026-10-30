@@ -28,12 +28,27 @@ cd ~/paper2brain-client && git pull && ./setup.sh --bot
 - **不开沙箱**：agent 能读写这台 Mac 上的文件、联网、运行命令。规范要求它不碰 `~/paper2brain*` 和各种口令，但这只是规范，不是硬隔离。
 - 关掉：删掉 `~/.paper2brain-client/config.json` 里的 `"p2bot": true`，再 `launchctl kickstart -k gui/$(id -u)/com.paper2brain.runner`。
 
+## 随手记小程序（可选，从 Idea2do 移植）
+
+屏幕上的悬浮小宠物、任意位置按 ⌃⌥空格 随手记一句、待办同步到"提醒事项"。记下的东西进服务器个人库的「随手记」（网页侧栏），在那里整理、确认、撤销。要 Xcode 命令行工具（`swift`）和 macOS 14 以上：
+
+```sh
+cd ~/paper2brain-client && git pull && mac/build.sh
+```
+
+- 装成 `~/Applications/p2b-jot.app`，登录时自动启动（launchd `com.paper2brain.jot`，日志 `/tmp/paper2brain-jot.log`）；菜单栏的叶子里可以隐藏小宠物、退出。
+- 小宠物：点一下弹出输入框（回车收下、⇧回车换行、Esc 关掉，没写完的留着）；悬停看接下来的待办和待确认，能直接完成、接受；拖动换位置；右键是菜单；把文字拖到它身上直接收下（当材料），文件、图片拖上去放进输入框。
+- 附件：图片、PDF、文本文件，最多 5 个，粘贴、拖入或点 📎。图片在这台 Mac 上识别文字（Vision）再一起传；勾掉"附件可以发给模型"就只存不发。
+- 提醒事项：叶子菜单里打开"同步待办到提醒事项"（第一次会问权限），待办写进「p2b 随手记」列表；以服务器为准，在提醒事项里改的标题、时间会被盖回去，勾的完成会读回来。
+- 用的是这台 Mac 的 agent 口令（`setup.sh` 写的）：服务器让它只多能用随手记的接口和上传附件。全局快捷键被别的程序（比如 Idea2do 本身）占用时不启用，菜单里会说。
+
 ## 里面有什么
 
 - `./p2b`：agent 运行的命令。每条都发到服务器执行（`p2b_client/remote.py`）；`--file` / `--image` 的内容随命令一起发，插图和画好的图回传到 `~/.paper2brain-client/cache`，代码仓库在本机检出同一个 commit。
 - `./p2b guide`：把服务器上当前的 `librarian/` 工作规范写到这里（服务器发来的每个任务都先运行它；`librarian/` 不进 git）。
 - `p2b_client/runner.py`：向服务器领取你的任务。Cursor 的任务用本机的 key 调用 Cursor 创建或续上 agent（agent 在本机 worker 上干活），TCodex 的任务在本机运行 `tcodex exec`；回答边生成边传回，网页上停止时这边也停。它还把你的 Cursor 账户能用的模型告诉服务器。
-- `ops/`：launchd 任务 `com.paper2brain.worker`、`com.paper2brain.runner`（日志 `/tmp/paper2brain-worker.log`、`/tmp/paper2brain-runner.log`）。
+- `ops/`：launchd 任务 `com.paper2brain.worker`、`com.paper2brain.runner`（日志 `/tmp/paper2brain-worker.log`、`/tmp/paper2brain-runner.log`），以及随手记小程序的 `com.paper2brain.jot`。
+- `mac/`：随手记小程序（Swift，`mac/build.sh` 构建安装）。
 
 一台 Mac 只有一个 `com.paper2brain.worker`：装上这个之后，它替服务器干活，不再替本机的单人版 paper2brain 干活。
 
