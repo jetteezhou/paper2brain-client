@@ -164,6 +164,27 @@ class Client(unittest.TestCase):
                          ("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-x", False))
         self.assertFalse(api.ready({"base_url": "https://x", "model": "m"}))  # no key: not offered to the server
 
+    def test_idea2do_dump_reads_its_dates_like_its_own_export(self):
+        import sqlite3
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent / "tools"))
+        import idea2do_dump as D
+        self.assertEqual(D.iso(812287904), "2026-09-28T11:31:44Z")  # Swift dates count from 2001
+        self.assertEqual(D.date({"raw": "明天", "certainty": "exact", "resolved": {"day": {"year": 2026, "month": 9, "day": 30}}})["day"], "2026-09-30")
+        at = D.date({"certainty": "exact", "resolved": {"dateTime": {"_0": 812390400, "timeZone": "Asia/Shanghai"}}})
+        self.assertEqual((at["dateTime"], at["timeZone"], at["raw"]), ("2026-09-29T16:00:00Z", "Asia/Shanghai", None))
+        self.assertEqual(D.date({"raw": "改天", "certainty": "unresolved"})["day"], None)
+        db = sqlite3.connect(":memory:")
+        for t in ("captures", "tasks", "notes", "memories", "matters", "matter_links"):
+            db.execute(f"CREATE TABLE {t} (payload BLOB)")
+        db.execute("INSERT INTO tasks VALUES (?)", (json.dumps({"id": "T", "title": "交方案", "status": "open", "priority": 1, "createdAt": 1,
+                                                               "evidence": {"captureID": "C", "quote": "交方案"}}),))
+        db.execute("INSERT INTO captures VALUES (?)", (json.dumps({"id": "C", "text": "x", "createdAt": 1, "attachments": [
+            {"id": "A", "kind": "image", "filename": "a.png", "segments": [{"text": "第一行"}, {"text": "第二行"}]}]}),))
+        doc = D.dump(db)
+        self.assertEqual((doc["tasks"][0]["priority"], doc["tasks"][0]["source"]), ("high", {"captureID": "C", "quote": "交方案"}))
+        self.assertEqual(doc["captures"][0]["_files"][0]["text"], "第一行\n第二行")
+
     def test_pictures_go_along_with_a_quick_call(self):
         g = {"base_url": "https://x", "model": "m", "api_key": "k"}
         with mock.patch.object(runner, "_post") as post, mock.patch.object(runner.api, "chat", return_value={"text": "ok"}) as chat:
