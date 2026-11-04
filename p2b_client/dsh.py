@@ -1,6 +1,7 @@
 """One DeepSeek Harness (`dsh --profile headless --json`) turn on this Mac, in this checkout (so its ./p2b goes to the
 server), and the models its desktop app offers. The same as the server repo's single-user dsh backend
 (paper2brain/cursor_api.py: dsh_turn, dsh_models)."""
+import glob
 import json
 import os
 import re
@@ -13,6 +14,40 @@ from . import REPO
 from .codex import PATH, _env, _short
 
 DSH_APP = "/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh"  # the desktop app's own CLI
+
+
+def _zstd():
+    return shutil.which("zstd", path=PATH) or next((x for x in ("/opt/homebrew/bin/zstd", "/usr/local/bin/zstd") if os.access(x, os.X_OK)), None)
+
+
+def fork_session(sid):
+    """A copy of a stored session under a new id, in the same workspace folder, resumable by the one-shot runner. For when the
+    session cannot be resumed in place: the desktop app holds its write lock, or it was made under the desktop's agent preset,
+    which `--profile headless` does not compose. The log is a zstd file whose first frame must be exactly the header line, so
+    it is written as two frames: the header (new id, no preset) and the rest. Returns the new id; the original is untouched."""
+    zstd = _zstd()
+    if not zstd:
+        raise RuntimeError("这个会话在电脑上被占着（或是桌面端的会话），要复制一份才能接着聊，但这台 Mac 没有 zstd：brew install zstd")
+    root = os.path.join(os.environ.get("DSH_HOME") or os.path.expanduser("~/.dsh"), "sessions")
+    src = next(iter(sorted(glob.glob(os.path.join(root, "*", sid, "session.v4.jsonl.zstd")))), None) if re.fullmatch(r"session-[0-9a-f-]{36}", sid) else None
+    if not src:
+        raise RuntimeError(f"找不到会话 {sid}：它在电脑上被删了？")
+    new = f"session-{uuid.uuid4()}"
+    raw = subprocess.run([zstd, "-dc", "--", src], capture_output=True, check=True, timeout=120).stdout.decode("utf-8").replace(sid, new)
+    head, _, rest = raw.partition("\n")
+    header = json.loads(head)
+    header.pop("agentPreset", None)
+    dst = os.path.join(os.path.dirname(os.path.dirname(src)), new)
+    os.makedirs(dst, mode=0o700)
+    with open(os.path.join(dst, "session.v4.jsonl.zstd"), "wb") as f:
+        for part in (json.dumps(header, ensure_ascii=False, separators=(",", ":")) + "\n", rest):
+            f.write(subprocess.run([zstd, "-q", "-c"], input=part.encode(), capture_output=True, check=True, timeout=120).stdout)
+    open(os.path.join(dst, "session.lock"), "w").close()
+    return new
+
+
+# what dsh says when a stored session cannot be resumed as it is (checked before anything ran, so nothing was written)
+FORK_ON = ("active write handle", "does not compose")
 
 
 def dsh_bin():

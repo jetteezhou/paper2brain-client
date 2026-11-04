@@ -86,11 +86,18 @@ def run(server, job, report):
         if job["engine"] != "dsh" or not job.get("session") or not cwd.is_dir():
             return report(True, text="", tools=[], done=True, error=f"工作区不在了，或不是 DeepSeek 的会话：{cwd}", duration_ms=0)
     try:
-        text, tools, error, usage = turn(job.get("session"), job["prompt"], [], job.get("model"), progress, procs.append, env, cwd)
+        session = job.get("session")
+        text, tools, error, usage = turn(session, job["prompt"], [], job.get("model"), progress, procs.append, env, cwd)
+        if job["engine"] == "dsh" and session and error and any(k in error for k in dsh.FORK_ON):
+            # the desktop app holds the session, or it is one of its own: go on in a copy (a branch; the desktop's stays as it is)
+            try:
+                session = dsh.fork_session(session)
+            except Exception as e:
+                return report(True, text="", tools=[], done=True, error=str(e), duration_ms=int((time.time() - started) * 1000))
+            report(True, session=session)
+            text, tools, error, usage = turn(session, job["prompt"], [], job.get("model"), progress, procs.append, env, cwd)
     except Exception as e:
         text, tools, error, usage = "", [], f"本机运行 p2bot 失败：{e}", {}
-    if error and "active write handle" in error:  # dsh's own guard: another process (the desktop app, an earlier turn) has the session open
-        error = "这个会话正被电脑上的 DeepSeek 桌面端打开着（或上一轮还没做完）：在电脑上切到别的会话，或关掉它，再从这里继续"
     report(True, text=text, tools=tools, done=True, error=error, duration_ms=int((time.time() - started) * 1000), usage=usage)
 
 

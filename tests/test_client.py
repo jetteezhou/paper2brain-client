@@ -1,6 +1,8 @@
 """The client on its own: no server, no network."""
 import base64
 import os
+import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -104,13 +106,49 @@ class Client(unittest.TestCase):
             return "好", [], "session \"s\" is already owned by an active write handle" if text == "占着" else None, {}
 
         job = {"task_id": "abc123", "engine": "dsh", "prompt": "接着做", "session": "session-s", "token": "t", "inputs": [], "cwd": str(ws)}
-        with mock.patch.object(bot, "ROOT", root), mock.patch.object(dsh, "dsh_turn", turn):
+        with mock.patch.object(bot, "ROOT", root), mock.patch.object(dsh, "dsh_turn", turn), \
+                mock.patch.object(dsh, "fork_session", side_effect=RuntimeError("复制不了")):
             for j in (job, {**job, "prompt": "占着"}, {**job, "cwd": str(ws / "gone")}, {**job, "engine": "tcodex"}):
                 bot.run("http://srv", j, lambda force=False, **f: reports.append(f) or True)
         self.assertEqual(calls[0], ("session-s", "接着做", ws))  # 不在 ~/p2bot/<任务> 里，在会话当初的目录里
-        self.assertIn("桌面端", reports[1]["error"])
+        self.assertEqual(reports[1]["error"], "复制不了")  # 占着时先复制一份；复制不了才报错，说出原因
         self.assertEqual(len(calls), 2)  # 目录不在了、不是 dsh 的会话，都不会去跑
         self.assertTrue(all("工作区不在了" in r["error"] for r in reports[2:]))
+
+    def test_a_session_the_desktop_holds_goes_on_in_a_copy_and_the_copy_is_reported(self):
+        root, ws, reports, calls = Path(tempfile.mkdtemp()), Path(tempfile.mkdtemp()), [], []
+
+        def turn(session, text, images, model, progress, started, env, cwd):
+            calls.append(session)
+            return ("", [], "session \"s\" is already owned by an active write handle", {}) if session == "session-held" else ("好", [], None, {})
+
+        job = {"task_id": "abc123", "engine": "dsh", "prompt": "接着做", "session": "session-held", "token": "t", "inputs": [], "cwd": str(ws)}
+        with mock.patch.object(bot, "ROOT", root), mock.patch.object(dsh, "dsh_turn", turn), mock.patch.object(dsh, "fork_session", return_value="session-copy"):
+            bot.run("http://srv", job, lambda force=False, **f: reports.append(f) or True)
+            self.assertEqual((calls, reports[0], reports[-1]["text"], reports[-1]["error"]), (["session-held", "session-copy"], {"session": "session-copy"}, "好", None))
+            with mock.patch.object(dsh, "fork_session", side_effect=RuntimeError("没有 zstd")):
+                bot.run("http://srv", job, lambda force=False, **f: reports.append(f) or True)
+            self.assertEqual(reports[-1]["error"], "没有 zstd")  # 复制不了就把原因说出来，不是笼统的"被占着"
+
+    @unittest.skipUnless(shutil.which("zstd"), "需要 zstd 命令")
+    def test_forking_a_session_keeps_the_header_a_frame_of_its_own_and_drops_the_desktop_preset(self):
+        home, sid = Path(tempfile.mkdtemp()), "session-11111111-1111-1111-1111-111111111111"
+        here = home / "sessions" / "--w--" / sid
+        here.mkdir(parents=True)
+        head = json.dumps({"type": "session", "version": 4, "id": sid, "cwd": "/w", "agentPreset": "standard"})
+        rest = json.dumps({"type": "user/message", "seq": 1, "data": {"text": f"见 {sid}"}}) + "\n"
+        z = lambda text: subprocess.run(["zstd", "-q", "-c"], input=text.encode(), capture_output=True, check=True).stdout  # noqa: E731
+        (here / "session.v4.jsonl.zstd").write_bytes(z(head + "\n") + z(rest))
+        before = (here / "session.v4.jsonl.zstd").read_bytes()
+        with mock.patch.dict(os.environ, {"DSH_HOME": str(home)}):
+            new = dsh.fork_session(sid)
+            with self.assertRaises(RuntimeError):
+                dsh.fork_session("session-../../x")
+        copy = home / "sessions" / "--w--" / new
+        self.assertEqual((here / "session.v4.jsonl.zstd").read_bytes(), before)  # 原来的一个字节没动
+        self.assertTrue((copy / "session.lock").exists())
+        out = subprocess.run(["zstd", "-dc", str(copy / "session.v4.jsonl.zstd")], capture_output=True, check=True).stdout.decode().splitlines()
+        self.assertEqual((json.loads(out[0])["id"], "agentPreset" in out[0], new in out[1], sid in out[1]), (new, False, True, False))
 
     def test_a_tool_turn_runs_the_servers_script_without_a_model(self):
         script = ("import json, sys, os\nout = sys.argv[sys.argv.index('--out') + 1]\n"
