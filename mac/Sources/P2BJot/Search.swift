@@ -178,8 +178,8 @@ final class SearchModel: ObservableObject {
             return [SearchRow(id: "m:link", icon: "link", title: "打开链接", subtitle: text, group: use) { NSWorkspace.shared.open(url) }, jot, more]
         }
         let papers = (live?.papers ?? []).prefix(5).map { p in
-            SearchRow(id: "m:paper", icon: "doc.text", title: p.title, subtitle: [p.shortName, p.tldr].compactMap { $0 }.joined(separator: " · "), group: "库里") { [self] in
-                open("/#/read/" + Self.escape(p.id))
+            SearchRow(id: "m:paper", icon: "doc.text", title: p.title, subtitle: [p.shortName, p.tldr].compactMap { $0 }.joined(separator: " · "), group: "库里", action: readAction(p.id)) { [self] in
+                open("/?paper=" + Self.escape(p.id))  // its card, like the web bar
             }
         }
         let ask = SearchRow(id: "m:ask", icon: "sparkles", title: "问：\(text)", subtitle: "联网回答", stays: true, group: "回答") { [self] in self.ask() }
@@ -195,12 +195,17 @@ final class SearchModel: ObservableObject {
         return ai + [ask] + papers + [search, web, jot, more] + go
     }
 
+    /// The reader (PDF) of a library paper; the row itself opens its card.
+    private func readAction(_ pid: String) -> RowAction {
+        RowAction(label: "阅读原文", id: "m:read") { [self] in open("/#/read/" + Self.escape(pid)) }
+    }
+
     private var aiRows: [SearchRow] {
         guard overviewFor == text, let o = overview else { return [] }
         let group = "AI 推荐"
         let lib = o.papers.map { p in
-            SearchRow(id: "m:aipaper", icon: "sparkles", title: p.title, subtitle: "库里 · " + [p.shortName, p.tldr].compactMap { $0 }.joined(separator: " · "), group: group) { [self] in
-                open("/#/read/" + Self.escape(p.id))
+            SearchRow(id: "m:aipaper", icon: "sparkles", title: p.title, subtitle: "库里 · " + [p.shortName, p.tldr].compactMap { $0 }.joined(separator: " · "), group: group, action: readAction(p.id)) { [self] in
+                open("/?paper=" + Self.escape(p.id))
             }
         }
         let web = o.web.compactMap { w -> SearchRow? in
@@ -208,7 +213,7 @@ final class SearchModel: ObservableObject {
             let add = w.pid.map { pid in
                 RowAction(label: "加入论文库", id: "m:aiadd") { [self] in
                     Task {
-                        do { _ = try await Server.shared.post("/api/bot/add-paper", ["pid": pid]); jot.onSaved?(); open("/#/read/" + Self.escape(pid)) } catch { jot.onWorried?("操作未完成") }
+                        do { _ = try await Server.shared.post("/api/bot/add-paper", ["pid": pid]); jot.onSaved?(); open("/?paper=" + Self.escape(pid)) } catch { jot.onWorried?("操作未完成") }
                     }
                 }
             }
