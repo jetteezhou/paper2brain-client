@@ -12,7 +12,7 @@ export const inject = ['typertGateway', 'connection']
 // what the page may ask for; anything else is refused here too (the server checks the same list)
 export const ALLOW = new Set([
   'session.list', 'session.create', 'session.prompt', 'session.cancel', 'session.page', 'session.state',
-  'session.modelCatalog', 'session.selectModel', 'session.rename', 'workspace.list',
+  'session.modelCatalog', 'session.selectModel', 'session.rename', 'p2bot.token',
 ])
 
 function settings() {
@@ -21,8 +21,21 @@ function settings() {
   return { server: String(cfg.server || '').replace(/\/+$/, ''), token: String(cfg.server_token || '') }
 }
 
+/** A p2bot task's turn run on this host: its token into the task folder's bin/p2bot (written by the runner on the task's first
+ * turn), so the agent's `./bin/p2bot put` hands files back to this turn. Only that one line of that one file changes. */
+export function writeToken({ task, token } = {}) {
+  if (!/^[0-9a-f]{16}$/.test(task || '') || !/^[A-Za-z0-9._-]{20,300}$/.test(token || '')) return { ok: false, error: 'bad task or token' }
+  const file = path.join(process.env.P2BOT_HOME || path.join(os.homedir(), 'p2bot'), task, 'bin', 'p2bot')
+  let body
+  try { body = fs.readFileSync(file, 'utf8') } catch { return { ok: false, error: 'this task has no folder on this Mac' } }
+  if (!/^P2BOT_SERVER=\S+ P2BOT_TURN=\S+ /m.test(body)) return { ok: false, error: 'unknown bin/p2bot' }
+  fs.writeFileSync(file, body.replace(/(^P2BOT_SERVER=\S+ P2BOT_TURN=)\S+/m, `$1${token}`), { mode: 0o700 })
+  return { ok: true, value: null }
+}
+
 export async function run(call, gateway, peer, signal) {
   if (!ALLOW.has(call.method)) return { ok: false, error: `not allowed: ${call.method}` }
+  if (call.method === 'p2bot.token') return writeToken(call.args)
   const [namespace, method] = call.method.split('.')
   try {
     return { ok: true, value: await gateway.invoke({ namespace, method, args: call.args || {}, signal, peer }) ?? null }
