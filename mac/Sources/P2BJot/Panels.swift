@@ -25,6 +25,24 @@ final class FloatingPanel: NSPanel {
     override var canBecomeMain: Bool { false }
     override func resignKey() { super.resignKey(); onResign?() }
 
+    /// This app has no menu bar (accessory app), so nothing maps ⌘A ⌘C ⌘V ⌘X ⌘Z to the text field: do it here.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if takesKeyboard, flags == .command || flags == [.command, .shift], let key = event.charactersIgnoringModifiers?.lowercased() {
+            let action: Selector? = switch (key, flags == .command) {
+            case ("a", true): #selector(NSText.selectAll(_:))
+            case ("c", true): #selector(NSText.copy(_:))
+            case ("v", true): #selector(NSText.paste(_:))
+            case ("x", true): #selector(NSText.cut(_:))
+            case ("z", true): Selector(("undo:"))
+            case ("z", false): Selector(("redo:"))
+            default: nil
+            }
+            if let action, NSApp.sendAction(action, to: nil, from: self) { return true }
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
     func fit() { setContentSize(contentView?.fittingSize ?? .zero) }
 }
 

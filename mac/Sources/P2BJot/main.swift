@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 
 /// p2b 随手记：menu bar leaf, the floating pet, ⌃⌥空格, and to-dos in Reminders. No Dock icon (LSUIElement).
 @MainActor
@@ -6,12 +7,15 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let jot = Jot()
     private lazy var pet = PetController(jot: jot)
     private let reminders = RemindersSync()
+    private lazy var search = SearchController(jot: jot)
     private var hotKey: GlobalHotKey?
+    private var searchKey: GlobalHotKey?
     private var status: NSStatusItem?
     private var problem: String?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         hotKey = GlobalHotKey { [weak self] in self?.pet.showQuickCapture() }
+        searchKey = GlobalHotKey(key: kVK_Space, modifiers: optionKey, id: 2) { [weak self] in self?.search.toggle() }
         status = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         status?.button?.image = NSImage(systemSymbolName: "leaf", accessibilityDescription: "p2b 随手记")
         let menu = NSMenu()
@@ -36,12 +40,13 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if !Server.shared.configured { pet.react(.worried("还没连上服务器"), for: 6) }
     }
 
-    func applicationWillTerminate(_ notification: Notification) { hotKey?.unregister() }
+    func applicationWillTerminate(_ notification: Notification) { hotKey?.unregister(); searchKey?.unregister() }
 
     // MARK: Menus
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
+        add(menu, "快速搜索", key: searchKey == nil ? "" : "⌥空格") { [weak self] in self?.search.show() }
         add(menu, "记录一下", key: hotKey == nil ? "" : GlobalHotKey.displayName) { [weak self] in self?.pet.showQuickCapture() }
         add(menu, "收下剪贴板内容") { [weak self] in self?.keepClipboard() }
         add(menu, "打开随手记") { [weak self] in self?.openPage() }
@@ -56,7 +61,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         sync.state = reminders.enabled ? .on : .off
         menu.addItem(.separator())
-        let note = [hotKey == nil ? "全局快捷键 \(GlobalHotKey.displayName) 被占用，未启用" : "任意位置按 \(GlobalHotKey.displayName) 记录",
+        let note = [searchKey == nil ? "全局快捷键 ⌥空格 被占用，快速搜索只能从菜单打开" : nil,
+                    hotKey == nil ? "全局快捷键 \(GlobalHotKey.displayName) 被占用，未启用" : "任意位置按 \(GlobalHotKey.displayName) 记录",
                     jot.offline ?? Server.shared.base.map { "已连上 \($0.host ?? "")" }, problem].compactMap { $0 }
         for line in note { menu.addItem(NSMenuItem(title: line, action: nil, keyEquivalent: "")) }
         menu.addItem(.separator())
