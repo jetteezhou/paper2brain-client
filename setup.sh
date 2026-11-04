@@ -2,7 +2,8 @@
 # Connect this Mac to a paper2brain server, safe to re-run. Keeps the Cursor worker and the runner running here: the
 # runner calls Cursor with your key, runs tcodex when installed and makes the quick search API calls, through this
 # Mac's proxy; the key and the API settings stay on this Mac (~/.paper2brain-client/config.json).
-# Usage: ./setup.sh <服务器地址> <本机 agent 口令>   (the token comes from the web page's Agent settings)
+# Usage: ./setup.sh [--bot] <服务器地址> <本机 agent 口令>   (the web page's Agent settings give this one command; with
+#        DeepSeek Harness installed it also adds its p2bot plugin)
 #        ./setup.sh --search                       (set the quick search API and its proxy again)
 #        ./setup.sh --bot                          (turn on p2bot: tasks from the web page's p2bot run on this Mac)
 set -e
@@ -93,7 +94,7 @@ else
 fi
 sh ops/install.sh worker runner
 DSH="/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh"
-if [ -n "$BOT" ] && [ -x "$DSH" ]; then  # the desktop app's conversations on the p2bot page, through its own host (dsh-plugin/)
+if [ -x "$DSH" ]; then  # the desktop app's conversations on the p2bot page, through its own host (dsh-plugin/)
   "$DSH" plugin --profile desktop add "file:$PWD/dsh-plugin" >/dev/null \
     && echo "✓ DeepSeek Harness 装好了 p2bot 插件：重开桌面端后，它的会话会出现在网页 p2bot 的 Mac 任务里，手机上也能接着聊" \
     || echo "（DeepSeek 插件没装上：之后运行 \"$DSH\" plugin --profile desktop add file:$PWD/dsh-plugin）"
