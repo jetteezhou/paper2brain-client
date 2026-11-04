@@ -6,7 +6,10 @@ final class Server: @unchecked Sendable {
     static let shared = Server()
 
     let base: URL?
-    private let token: String?
+    private let lock = NSLock()
+    private var _token: String?
+    private var token: String? { lock.withLock { _token } }
+    private let home: String
     private let session: URLSession = {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 30
@@ -15,18 +18,39 @@ final class Server: @unchecked Sendable {
 
     init() {
         let env = ProcessInfo.processInfo.environment
-        let home = env["P2B_CLIENT_HOME"] ?? (NSHomeDirectory() + "/.paper2brain-client")
-        let config = (try? Data(contentsOf: URL(fileURLWithPath: home + "/config.json")))
-            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
-        let server = env["P2B_SERVER"] ?? config["server"] as? String
+        home = env["P2B_CLIENT_HOME"] ?? (NSHomeDirectory() + "/.paper2brain-client")
+        let server = env["P2B_SERVER"] ?? Self.config(home)["server"] as? String
         base = server.flatMap { URL(string: $0.hasSuffix("/") ? String($0.dropLast()) : $0) }
-        token = env["P2B_TOKEN"] ?? config["server_token"] as? String
+        _token = Self.freshToken(home)
+    }
+
+    private static func config(_ home: String) -> [String: Any] {
+        (try? Data(contentsOf: URL(fileURLWithPath: home + "/config.json")))
+            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+    }
+
+    private static func freshToken(_ home: String) -> String? {
+        ProcessInfo.processInfo.environment["P2B_TOKEN"] ?? config(home)["server_token"] as? String
+    }
+
+    /// ./setup.sh issues a new token and the server drops the old one at once; true when config.json has a different one now.
+    private func reloadToken() -> Bool {
+        let fresh = Self.freshToken(home)
+        return lock.withLock {
+            defer { _token = fresh }
+            return fresh != nil && fresh != _token
+        }
     }
 
     var configured: Bool { base != nil && token != nil }
     var page: URL? { base.flatMap { URL(string: $0.absoluteString + "/#/idea2do") } }
 
     func data(_ method: String, _ path: String, json: [String: Any]? = nil, body: Data? = nil) async throws -> Data {
+        do { return try await send(method, path, json: json, body: body) }
+        catch Failure.http(401, _) where reloadToken() { return try await send(method, path, json: json, body: body) }
+    }
+
+    private func send(_ method: String, _ path: String, json: [String: Any]?, body: Data?) async throws -> Data {
         guard let base, let token, let url = URL(string: base.absoluteString + path) else { throw Failure.notConfigured }
         var req = URLRequest(url: url)
         req.httpMethod = method
