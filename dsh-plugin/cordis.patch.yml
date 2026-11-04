@@ -1,0 +1,4 @@
+- insert:
+    - id: p2bot-bridge
+      name: p2bot-bridge
+      config: {}

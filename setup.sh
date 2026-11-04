@@ -92,5 +92,11 @@ else
   echo "（没找到 tcodex：要用 TCodex 的模型，装好并 tcodex login 后重启 runner：launchctl kickstart -k gui/$(id -u)/com.paper2brain.runner）"
 fi
 sh ops/install.sh worker runner
+DSH="/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh"
+if [ -n "$BOT" ] && [ -x "$DSH" ]; then  # the desktop app's conversations on the p2bot page, through its own host (dsh-plugin/)
+  "$DSH" plugin --profile desktop add "file:$PWD/dsh-plugin" >/dev/null \
+    && echo "✓ DeepSeek Harness 装好了 p2bot 插件：重开桌面端后，它的会话会出现在网页 p2bot 的 Mac 任务里，手机上也能接着聊" \
+    || echo "（DeepSeek 插件没装上：之后运行 \"$DSH\" plugin --profile desktop add file:$PWD/dsh-plugin）"
+fi
 if [ -n "$BOT" ]; then echo "✓ p2bot 已开启：网页个人库里的 p2bot 任务在这台 Mac 的 ~/p2bot/ 下执行。关掉：把 config.json 里的 \"p2bot\" 删掉，再 launchctl kickstart -k gui/$(id -u)/com.paper2brain.runner"; fi
 echo "✓ 好了：网页上的 agent 和快速搜索都在这台 Mac 上运行（Mac 关机时它们不可用，其他功能照常）。"
