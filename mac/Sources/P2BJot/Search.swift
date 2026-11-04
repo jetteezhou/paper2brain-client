@@ -98,6 +98,7 @@ final class SearchModel: ObservableObject {
     private let jot: Jot
     private var pending: Task<Void, Never>?
     private let resumable: Session?
+    private var topic: String?  // what the conversation is about: the library paper the first question matched, else its text
     var lastKept: Session?
 
     init(jot: Jot, resume: Session? = nil) {
@@ -115,11 +116,12 @@ final class SearchModel: ObservableObject {
     }
 
     func newChat() {
-        turns = []; asked = ""; answer = nil; query = ""
+        turns = []; asked = ""; answer = nil; topic = nil; query = ""
     }
 
     private func resume(_ s: Session) {
         guard let last = s.turns.last else { return }
+        topic = s.turns.first?.q
         turns = Array(s.turns.dropLast()); asked = last.q; answer = .done(last.a, last.sources); query = ""
     }
 
@@ -225,7 +227,13 @@ final class SearchModel: ObservableObject {
     private func ask(_ q: String) {
         if case let .done(a, sources) = answer { turns.append(Turn(q: asked, a: a, sources: sources)) }
         let first = turns.isEmpty
+        if first { topic = live?.papers.first?.title ?? overview?.papers.first?.title ?? q }
         asked = q; query = ""
+        if let link = scholarLink(q) {  // asking for the Google Scholar page is not a question: open it
+            NSWorkspace.shared.open(link.url)
+            answer = .done("已在浏览器打开谷歌学术：\(link.query)", [Source(title: "Google Scholar", url: link.url.absoluteString)])
+            return
+        }
         if first, overviewFor == q, let said = overview?.answer, !said.isEmpty { answer = .done(said, []); return }  // the overview already has one
         answer = .loading
         let history = turns.suffix(6).map { ["q": $0.q, "a": $0.a] }
@@ -237,6 +245,15 @@ final class SearchModel: ObservableObject {
                 if asked == q { answer = .failed(error.localizedDescription) }
             }
         }
+    }
+
+    /// "给我谷歌学术链接": Scholar's search for what the conversation is about (the model has no real link to give).
+    private func scholarLink(_ q: String) -> (url: URL, query: String)? {
+        guard q.range(of: #"谷歌学术|google\s*scholar|\bscholar\b"#, options: [.regularExpression, .caseInsensitive]) != nil else { return nil }
+        let own = q.replacingOccurrences(of: #"(给我|帮我|打开|搜索|搜|查|找|看看)?(谷歌学术|google\s*scholar|scholar)(链接|连接|网址|页面)?[，,。\s]*"#, with: "", options: [.regularExpression, .caseInsensitive])
+        let query = topic.flatMap { $0 == q ? nil : $0 } ?? (own.count >= 2 ? own : q)  // topic is q itself when nothing matched the first question
+        guard let url = URL(string: "https://scholar.google.com/scholar?q=" + Self.escape(query)) else { return nil }
+        return (url, query)
     }
 
     private struct Reply: Decodable { var answer: String; var sources: [Source] }
