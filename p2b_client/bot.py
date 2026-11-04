@@ -90,7 +90,7 @@ def run(server, job, report):
     except Exception as e:
         text, tools, error, usage = "", [], f"本机运行 p2bot 失败：{e}", {}
     if error and "active write handle" in error:  # dsh's own guard: another process (the desktop app, an earlier turn) has the session open
-        error = "这个会话正被 DeepSeek 桌面端或另一轮占着，关掉它或等它做完再追问"
+        error = "这个会话正被电脑上的 DeepSeek 桌面端打开着（或上一轮还没做完）：在电脑上切到别的会话，或关掉它，再从这里继续"
     report(True, text=text, tools=tools, done=True, error=error, duration_ms=int((time.time() - started) * 1000), usage=usage)
 
 
