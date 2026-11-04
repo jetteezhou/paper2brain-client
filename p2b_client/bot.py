@@ -80,10 +80,17 @@ def run(server, job, report):
             os.killpg(procs[0].pid, signal.SIGTERM)
 
     turn = dsh.dsh_turn if job["engine"] == "dsh" else codex_turn
+    cwd = here
+    if job.get("cwd"):  # a session synced from the DeepSeek desktop app resumes only in the folder it was recorded in
+        cwd = Path(job["cwd"])
+        if job["engine"] != "dsh" or not job.get("session") or not cwd.is_dir():
+            return report(True, text="", tools=[], done=True, error=f"工作区不在了，或不是 DeepSeek 的会话：{cwd}", duration_ms=0)
     try:
-        text, tools, error, usage = turn(job.get("session"), job["prompt"], [], job.get("model"), progress, procs.append, env, here)
+        text, tools, error, usage = turn(job.get("session"), job["prompt"], [], job.get("model"), progress, procs.append, env, cwd)
     except Exception as e:
         text, tools, error, usage = "", [], f"本机运行 p2bot 失败：{e}", {}
+    if error and "active write handle" in error:  # dsh's own guard: another process (the desktop app, an earlier turn) has the session open
+        error = "这个会话正被 DeepSeek 桌面端或另一轮占着，关掉它或等它做完再追问"
     report(True, text=text, tools=tools, done=True, error=error, duration_ms=int((time.time() - started) * 1000), usage=usage)
 
 

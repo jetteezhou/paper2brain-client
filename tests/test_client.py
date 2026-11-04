@@ -12,7 +12,7 @@ import contextlib  # noqa: E402
 import io  # noqa: E402
 import json  # noqa: E402
 
-from p2b_client import api, bot, codex, cursor, remote, runner  # noqa: E402
+from p2b_client import api, bot, codex, cursor, dsh, remote, runner  # noqa: E402
 
 
 def sse(*pairs):
@@ -95,6 +95,22 @@ class Client(unittest.TestCase):
         self.assertEqual(puts, [("http://srv/api/bot/run/put?name=out.txt", "Bearer lib.bt-1.s")])
         with self.assertRaises(ValueError):
             bot.folder("../x")
+
+    def test_a_synced_desktop_session_resumes_in_its_own_folder_and_nowhere_else(self):
+        root, ws, reports, calls = Path(tempfile.mkdtemp()), Path(tempfile.mkdtemp()), [], []
+
+        def turn(session, text, images, model, progress, started, env, cwd):
+            calls.append((session, text, cwd))
+            return "好", [], "session \"s\" is already owned by an active write handle" if text == "占着" else None, {}
+
+        job = {"task_id": "abc123", "engine": "dsh", "prompt": "接着做", "session": "session-s", "token": "t", "inputs": [], "cwd": str(ws)}
+        with mock.patch.object(bot, "ROOT", root), mock.patch.object(dsh, "dsh_turn", turn):
+            for j in (job, {**job, "prompt": "占着"}, {**job, "cwd": str(ws / "gone")}, {**job, "engine": "tcodex"}):
+                bot.run("http://srv", j, lambda force=False, **f: reports.append(f) or True)
+        self.assertEqual(calls[0], ("session-s", "接着做", ws))  # 不在 ~/p2bot/<任务> 里，在会话当初的目录里
+        self.assertIn("桌面端", reports[1]["error"])
+        self.assertEqual(len(calls), 2)  # 目录不在了、不是 dsh 的会话，都不会去跑
+        self.assertTrue(all("工作区不在了" in r["error"] for r in reports[2:]))
 
     def test_a_tool_turn_runs_the_servers_script_without_a_model(self):
         script = ("import json, sys, os\nout = sys.argv[sys.argv.index('--out') + 1]\n"
