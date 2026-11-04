@@ -65,6 +65,19 @@ enum Answer: Equatable {
     case loading, done(String, [Source]), failed(String)
 }
 
+/// A finished question and answer of the conversation in the bar.
+struct Turn: Equatable {
+    var q: String
+    var a: String
+    var sources: [Source] = []
+}
+
+/// What the bar was showing when it closed, offered again for ten minutes (the 最近 group).
+struct Session {
+    var turns: [Turn]
+    var at = Date()
+}
+
 @MainActor
 final class SearchModel: ObservableObject {
     static let engine = UserDefaults.standard.string(forKey: "searchURL") ?? "https://cn.bing.com/search?q="
@@ -72,7 +85,9 @@ final class SearchModel: ObservableObject {
 
     @Published var query = "" { didSet { if query != oldValue { changed() } } }
     @Published var found: Found?
-    @Published var answer: Answer?
+    @Published var answer: Answer?  // to `asked`
+    @Published var asked = ""  // the question being answered; non-empty = the bar is a conversation
+    @Published var turns: [Turn] = []  // the finished ones before it
     @Published var overview: Overview?
     @Published var overviewLoading = false
     private var foundFor = "", overviewFor = ""
@@ -82,8 +97,34 @@ final class SearchModel: ObservableObject {
     var onClose: () -> Void = {}
     private let jot: Jot
     private var pending: Task<Void, Never>?
+    private let resumable: Session?
+    var lastKept: Session?
 
-    init(jot: Jot) { self.jot = jot }
+    init(jot: Jot, resume: Session? = nil) {
+        self.jot = jot
+        resumable = resume.flatMap { Date().timeIntervalSince($0.at) < 600 && !$0.turns.isEmpty ? $0 : nil }
+    }
+
+    var inChat: Bool { !asked.isEmpty }
+
+    /// The conversation as it stands, for the controller to keep when the bar closes.
+    var session: Session? {
+        var all = turns
+        if case let .done(a, sources) = answer { all.append(Turn(q: asked, a: a, sources: sources)) }
+        return all.isEmpty ? nil : Session(turns: all)
+    }
+
+    func newChat() {
+        turns = []; asked = ""; answer = nil; query = ""
+    }
+
+    private func resume(_ s: Session) {
+        guard let last = s.turns.last else { return }
+        turns = Array(s.turns.dropLast()); asked = last.q; answer = .done(last.a, last.sources); query = ""
+    }
+
+    /// Typing a link or a prefixed jot while in a conversation is something new, not a follow-up.
+    private var leavesChat: Bool { isLink || text.range(of: #"^\s*(?:待办|想法|记住)\s*[:：]|^\s*(?:交给|让)\s*mac"#, options: [.regularExpression, .caseInsensitive]) != nil }
 
     var text: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
     /// The verdict is for what is typed now, not for the last letters before it.
@@ -106,6 +147,9 @@ final class SearchModel: ObservableObject {
 
     /// Nothing typed: what was asked lately, what is next, and where to go (the web bar's 开始 and 前往).
     private var emptyRows: [SearchRow] {
+        let again = resumable.map { s in
+            SearchRow(id: "m:resume", icon: "bubble.left.and.bubble.right", title: "继续对话：" + (s.turns.first?.q ?? ""), subtitle: "\(s.turns.count) 轮", stays: true, group: "最近") { [self] in resume(s) }
+        }
         let recent = Self.history.prefix(4).map { q in
             SearchRow(id: "m:recent", icon: "clock", title: q, stays: true, group: "最近") { [self] in query = q }
         }
@@ -113,7 +157,7 @@ final class SearchModel: ObservableObject {
             SearchRow(id: "m:todo", icon: "circle", title: item.title, subtitle: item.reason, group: "接下来",
                       action: RowAction(label: "完成", id: "m:todo-done") { [self] in jot.complete(item.id) }) { [self] in open("/#/bot/notes") }
         }
-        return recent + todos + navRows(Self.nav.filter { Self.homeNav.contains($0.1) }) + [palette(group: "前往", title: "在网页万能栏打开", subtitle: "找论文、交给 Mac、收下文件…")]
+        return Array(again.map { [$0] } ?? []) + recent + todos + navRows(Self.nav.filter { Self.homeNav.contains($0.1) }) + [palette(group: "前往", title: "在网页万能栏打开", subtitle: "找论文、交给 Mac、收下文件…")]
     }
 
     /// Everything the web bar does that this one does not (找论文, 讨论, 交给 Mac, 收下, 开始研究, 速览): it opens with the text in it.
@@ -122,6 +166,7 @@ final class SearchModel: ObservableObject {
     }
 
     var rows: [SearchRow] {
+        guard !inChat else { return [] }
         guard !text.isEmpty else { return emptyRows }
         let intent = live?.route.intent
         let use = "用这段话"
@@ -174,16 +219,22 @@ final class SearchModel: ObservableObject {
         return lib + web
     }
 
-    private func ask() {
-        let q = text
-        if overviewFor == q, let said = overview?.answer, !said.isEmpty { answer = .done(said, []); return }  // the overview already has one
+    /// The first question of a conversation, from the 问 row. Follow-ups come from ask(_:) with the input's text.
+    private func ask() { ask(text) }
+
+    private func ask(_ q: String) {
+        if case let .done(a, sources) = answer { turns.append(Turn(q: asked, a: a, sources: sources)) }
+        let first = turns.isEmpty
+        asked = q; query = ""
+        if first, overviewFor == q, let said = overview?.answer, !said.isEmpty { answer = .done(said, []); return }  // the overview already has one
         answer = .loading
+        let history = turns.suffix(6).map { ["q": $0.q, "a": $0.a] }
         Task {
             do {
-                let got = try JSONDecoder().decode(Reply.self, from: try await Server.shared.post("/api/bot/ask", ["q": q]))
-                if q == text { answer = .done(got.answer, got.sources) }
+                let got = try JSONDecoder().decode(Reply.self, from: try await Server.shared.post("/api/bot/ask", ["q": q, "history": history]))
+                if asked == q { answer = .done(got.answer, got.sources) }
             } catch {
-                if q == text { answer = .failed(error.localizedDescription) }
+                if asked == q { answer = .failed(error.localizedDescription) }
             }
         }
     }
@@ -197,8 +248,14 @@ final class SearchModel: ObservableObject {
 
     /// secondary (⌘↵, or the button at the row's right): the row's own action, if it has one.
     func submit(secondary: Bool = false) {
-        if let answer {  // a shown answer: Return takes it along
-            if case let .done(text, _) = answer { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string); onClose() }
+        if inChat {
+            if text.isEmpty {  // nothing typed: Return takes the answer along
+                if case let .done(a, _) = answer { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(a, forType: .string); onClose() }
+            } else if answer != .loading {
+                let q = text
+                Task { _ = try? await Server.shared.post("/api/bot/route", ["q": q, "picked": "m:follow", "src": "mac"]) }
+                ask(q)
+            }
             return
         }
         let rows = rows
@@ -241,8 +298,12 @@ final class SearchModel: ObservableObject {
 
     /// Library hits as it is typed (the web bar's 160ms), without a model; a late answer for an old query is dropped.
     private func changed() {
+        if inChat {
+            guard leavesChat else { return }
+            if let kept = session { lastKept = kept }
+            turns = []; asked = ""; answer = nil
+        }
         selected = 0
-        answer = nil
         overview = nil; overviewLoading = false
         pending?.cancel(); pendingOverview?.cancel()
         let q = text
@@ -269,11 +330,11 @@ struct SearchView: View {
     static let debug = UserDefaults.standard.object(forKey: "routeDebug") as? Bool ?? true  // defaults write com.paper2brain.jot routeDebug -bool false
 
     var body: some View {
-        let rows = model.answer == nil ? model.rows : []
+        let rows = model.rows
         VStack(spacing: 0) {
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass").font(.title3).foregroundStyle(.secondary)
-                SearchField(text: $model.query, onMove: model.move, onSubmit: { model.submit(secondary: $0) }, onCancel: model.onClose)
+                SearchField(text: $model.query, placeholder: model.inChat ? "追问…" : "问一句、搜论文、搜网页、记一句", onMove: model.move, onSubmit: { model.submit(secondary: $0) }, onCancel: model.onClose)
                     .frame(height: 30)
             }
             .padding(.horizontal, 16).padding(.vertical, 12)
@@ -307,12 +368,19 @@ struct SearchView: View {
                     .onTapGesture { model.selected = i; model.submit() }
                 }
             }
-            if let answer = model.answer {
+            if model.inChat {
                 Divider()
-                Group {
-                    switch answer {
-                    case .loading: HStack(spacing: 8) { ProgressView().controlSize(.small); Text("联网查一下…").foregroundStyle(.secondary) }
-                    case let .done(text, sources):
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(Array(model.turns.suffix(3).enumerated()), id: \.offset) { _, t in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(t.q).font(.callout.weight(.medium)).lineLimit(1)
+                            Text(t.a).font(.callout).foregroundStyle(.secondary).lineLimit(2)
+                        }
+                    }
+                    Text(model.asked).font(.callout.weight(.medium))
+                    switch model.answer {
+                    case .loading, .none: HStack(spacing: 8) { ProgressView().controlSize(.small); Text("联网查一下…").foregroundStyle(.secondary) }
+                    case let .done(text, sources)?:
                         VStack(alignment: .leading, spacing: 6) {
                             Text(text).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                             if !sources.isEmpty {
@@ -324,12 +392,16 @@ struct SearchView: View {
                                 }.font(.caption)
                             }
                         }
-                    case let .failed(message): Text(message).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                    case let .failed(message)?: Text(message).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).padding(.vertical, 12)
-                Text("↵ 复制答案并关闭 · 改一下问题就回到列表 · Esc 关闭")
-                    .font(.caption2).foregroundStyle(.tertiary).frame(maxWidth: .infinity, alignment: .trailing).padding(.horizontal, 16).padding(.bottom, 6)
+                HStack(spacing: 8) {
+                    Button("新问题 ⌘N") { model.newChat() }.keyboardShortcut("n", modifiers: .command).buttonStyle(.borderless).font(.caption2)
+                    Spacer()
+                    Text("直接输入追问，↵ 发送 · 输入为空时 ↵ 复制答案并关闭 · Esc 关闭").font(.caption2).foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 16).padding(.bottom, 6)
             } else if let error = model.error {
                 Text(error).font(.caption).foregroundStyle(.red).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).padding(.vertical, 6)
             } else if Self.debug, let route = model.live?.route, !rows.isEmpty {
@@ -343,6 +415,8 @@ struct SearchView: View {
         .onChange(of: rows.count) { _, _ in DispatchQueue.main.async(execute: resize) }
         .onChange(of: model.error) { _, _ in DispatchQueue.main.async(execute: resize) }
         .onChange(of: model.answer) { _, _ in DispatchQueue.main.async(execute: resize) }
+        .onChange(of: model.turns.count) { _, _ in DispatchQueue.main.async(execute: resize) }
+        .onChange(of: model.asked) { _, _ in DispatchQueue.main.async(execute: resize) }
         .onChange(of: model.overviewLoading) { _, _ in DispatchQueue.main.async(execute: resize) }
     }
 }
@@ -351,6 +425,7 @@ struct SearchView: View {
 /// those keys and the half-typed letters are the input method's, so neither is acted on.
 struct SearchField: NSViewRepresentable {
     @Binding var text: String
+    var placeholder: String
     var onMove: (Int) -> Void
     var onSubmit: (Bool) -> Void  // true: with ⌘
     var onCancel: () -> Void
@@ -363,7 +438,7 @@ struct SearchField: NSViewRepresentable {
         field.drawsBackground = false
         field.focusRingType = .none
         field.font = .systemFont(ofSize: 22)
-        field.placeholderString = "问一句、搜论文、搜网页、记一句"
+        field.placeholderString = placeholder
         field.delegate = context.coordinator
         DispatchQueue.main.async { field.window?.makeFirstResponder(field) }
         return field
@@ -371,6 +446,7 @@ struct SearchField: NSViewRepresentable {
 
     func updateNSView(_ field: NSTextField, context: Context) {
         context.coordinator.parent = self
+        field.placeholderString = placeholder
         if field.stringValue != text, (field.currentEditor() as? NSTextView)?.hasMarkedText() != true { field.stringValue = text }
     }
 
@@ -402,6 +478,8 @@ struct SearchField: NSViewRepresentable {
 final class SearchController {
     private let jot: Jot
     private var panel: FloatingPanel?
+    private var model: SearchModel?
+    private var kept: Session?  // the last conversation, offered again for ten minutes
 
     init(jot: Jot) { self.jot = jot }
 
@@ -411,7 +489,8 @@ final class SearchController {
 
     func show() {
         panel?.orderOut(nil)
-        let model = SearchModel(jot: jot)
+        let model = SearchModel(jot: jot, resume: kept)
+        self.model = model
         model.onClose = { [weak self] in self?.close() }
         let panel = FloatingPanel(SearchView(model: model, resize: { [weak self] in self?.resize() }), takesKeyboard: true)
         panel.onResign = { [weak self] in DispatchQueue.main.async { self?.close() } }
@@ -425,8 +504,10 @@ final class SearchController {
     }
 
     func close() {
+        if let s = model?.session ?? model?.lastKept { kept = s }
         panel?.orderOut(nil)
         panel = nil
+        model = nil
     }
 
     /// The list grew or shrank: the top edge stays where it is.
