@@ -13,6 +13,9 @@ export const inject = ['typertGateway', 'connection']
 export const ALLOW = new Set([
   'session.list', 'session.create', 'session.prompt', 'session.cancel', 'session.page', 'session.state',
   'session.modelCatalog', 'session.selectModel', 'session.rename', 'p2bot.token', 'p2bot.pending', 'p2bot.answer',
+  // the desktop's navigation (workspaces group the sessions; archiving is its delete) and its background jobs
+  'p2bot.workspaces', 'p2bot.jobs', 'workspace.rename', 'workspace.pinSession', 'workspace.unpinSession',
+  'workspace.archiveSession', 'workspace.unarchiveSession', 'job.kill',
 ])
 
 function settings() {
@@ -68,12 +71,37 @@ export async function answer({ session, id, value } = {}, gateway, peer, signal)
   return accepted ? { ok: true, value: null } : { ok: false, error: 'this question is no longer waiting' }
 }
 
+/** The first frame of a stream method (a roster, a baseline): read once, then let go of the stream. */
+async function first(gateway, request) {
+  const stop = new AbortController()
+  try {
+    for await (const frame of await gateway.stream({ ...request, signal: stop.signal })) return frame
+  } finally {
+    stop.abort()
+  }
+}
+
+/** Workspaces (the groups), their sessions in order, and the archived and pinned session ids. */
+export async function workspaces(_args, gateway, peer) {
+  return { ok: true, value: (await first(gateway, { namespace: 'workspace', method: 'follow', args: {}, peer })).value }
+}
+
+/** The jobs still running that this session can see, as the desktop's header counts them. */
+export async function jobs({ session } = {}, gateway, peer) {
+  if (!SESSION.test(session || '')) return { ok: false, error: 'bad session' }
+  const frame = await first(gateway, { namespace: 'job', method: 'list', args: { request: { sessionId: session } }, peer })
+  const live = (frame.jobs ?? []).filter((j) => j.status === 'running' || j.status === 'stopping')
+  return { ok: true, value: live.map((j) => ({ id: j.id, kind: j.kind, label: j.label, status: j.status, at: j.startedAt, bytes: j.output?.total ?? 0 })) }
+}
+
+const LOCAL = { 'p2bot.pending': pending, 'p2bot.answer': answer, 'p2bot.workspaces': workspaces, 'p2bot.jobs': jobs }
+
 export async function run(call, gateway, peer, signal) {
   if (!ALLOW.has(call.method)) return { ok: false, error: `not allowed: ${call.method}` }
   if (call.method === 'p2bot.token') return writeToken(call.args)
-  if (call.method === 'p2bot.pending' || call.method === 'p2bot.answer') {
+  if (LOCAL[call.method]) {
     try {
-      return await (call.method === 'p2bot.pending' ? pending : answer)(call.args, gateway, peer, signal)
+      return await LOCAL[call.method](call.args, gateway, peer, signal)
     } catch (e) {
       return { ok: false, error: String(e?.message || e).slice(0, 500), code: e?.code }
     }

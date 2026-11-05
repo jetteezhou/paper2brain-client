@@ -57,3 +57,17 @@ test('what the agent asks is read from the open requests and the projection, and
   assert.equal((await run({ method: 'p2bot.answer', args: { session: S, id: 'c1', value: mine } }, gateway, {})).ok, true)  // continued: through the API
   assert.equal((await run({ method: 'p2bot.answer', args: { session: S, id: 'gone', value: mine } }, gateway, {})).ok, false)
 })
+
+test('the groups and the running jobs are the first frame of their streams, which are let go of', async () => {
+  const opened = []
+  const frames = { 'workspace/follow': { type: 'baseline', value: { items: [{ workspaceId: 'w', sessionIds: [S] }], archivedSessionIds: [], pinnedSessionIds: [S] } },
+    'job/list': { type: 'rows', jobs: [{ id: 'j1', kind: 'bash', label: 'sleep', status: 'running', startedAt: 1, output: { total: 5 } }, { id: 'j2', status: 'succeeded' }] } }
+  const gateway = { stream: async (r) => { opened.push(r); return (async function* () { yield frames[`${r.namespace}/${r.method}`]; await new Promise(() => {}) })() } }
+  assert.deepEqual((await run({ method: 'p2bot.workspaces', args: {} }, gateway, {})).value.pinnedSessionIds, [S])
+  assert.deepEqual((await run({ method: 'p2bot.jobs', args: { session: S } }, gateway, {})).value, [{ id: 'j1', kind: 'bash', label: 'sleep', status: 'running', at: 1, bytes: 5 }])
+  assert.equal(opened[1].args.request.sessionId, S)
+  assert.ok(opened.every((r) => r.signal.aborted))
+  assert.equal((await run({ method: 'p2bot.jobs', args: { session: 'x' } }, gateway, {})).ok, false)
+  for (const m of ['workspace.rename', 'workspace.pinSession', 'workspace.archiveSession', 'job.kill']) assert.ok(ALLOW.has(m))
+  assert.ok(!ALLOW.has('workspace.delete') && !ALLOW.has('workspace.create'))
+})
