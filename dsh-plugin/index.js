@@ -15,7 +15,7 @@ export const ALLOW = new Set([
   'session.modelCatalog', 'session.selectModel', 'session.rename', 'p2bot.token', 'p2bot.pending', 'p2bot.answer',
   // the desktop's navigation (workspaces group the sessions; archiving is its delete) and its background jobs
   'p2bot.workspaces', 'p2bot.jobs', 'workspace.rename', 'workspace.pinSession', 'workspace.unpinSession',
-  'workspace.archiveSession', 'workspace.unarchiveSession', 'job.kill',
+  'workspace.archiveSession', 'workspace.unarchiveSession', 'job.kill', 'workspace.create', 'workspace.delete',
 ])
 
 function settings() {
@@ -107,6 +107,8 @@ export async function run(call, gateway, peer, signal) {
     }
   }
   const [namespace, method] = call.method.split('.')
+  // a group is a folder on this Mac, which the host wants fully qualified
+  if (call.method === 'workspace.create' && /^~(\/|$)/.test(call.args?.request?.path ?? '')) call.args.request.path = os.homedir() + call.args.request.path.slice(1)
   try {
     return { ok: true, value: await gateway.invoke({ namespace, method, args: call.args || {}, signal, peer }) ?? null }
   } catch (e) {
