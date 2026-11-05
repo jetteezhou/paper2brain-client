@@ -6,6 +6,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { run, ALLOW, writeToken } from './index.js'
 
+const S = 'session-11111111-1111-1111-1111-111111111111'
+
 test('only the allowed calls reach the host, with the peer and named args', async () => {
   const seen = []
   const gateway = { invoke: async (r) => { seen.push(r); if (r.method === 'cancel') throw Object.assign(new Error('busy'), { code: 'session/x' }); return { items: [] } } }
@@ -30,4 +32,28 @@ test('a turn token goes into that task\'s bin/p2bot only, replacing just the tok
   assert.equal(writeToken({ task: '../../etc/passwdx', token }).ok, false)
   assert.equal(writeToken({ task: 'abcdef0123456789', token: 'x; rm -rf ~' + 'a'.repeat(20) }).ok, false)
   assert.equal(writeToken({ task: '0000000000000000', token }).ok, false)  // no folder: the server lets the runner do the turn
+})
+
+test('what the agent asks is read from the open requests and the projection, and answered where it waits', async () => {
+  const ev = (eventId, event, request, agentId = S) => ({ id: eventId, frame: { eventId, event, agentId, request } })
+  const questions = [{ id: 'a', question: '选哪个？', options: [{ label: 'x' }] }]
+  const settled = []
+  const gateway = {
+    pendingRemoteEvents: new Map([['e1', ev('e1', 'user-questions/request', { questions })], ['e2', ev('e2', 'approval/request', { toolName: 'bash', reason: 'rm' })],
+      ['e3', ev('e3', 'approval/request', { toolName: 'other' }, 'session-22222222-2222-2222-2222-222222222222')]]),
+    settleRemoteEvent: (p, outcome) => settled.push([p.id, outcome]),
+    invoke: async (r) => (r.namespace === 'session'
+      ? { values: { userQuestions: { active: [{ callId: 'c1', state: 'continued', questions }, { callId: 'c2', state: 'open', questions }] } } }
+      : (r.args.callId === 'c1')),
+  }
+  const items = (await run({ method: 'p2bot.pending', args: { session: S } }, gateway, {})).value
+  assert.deepEqual(items.map((i) => [i.kind, i.id]), [['question', 'e1'], ['approval', 'e2'], ['question', 'c1']])  // not the other session's, not the one still open in the projection
+  assert.equal((await run({ method: 'p2bot.pending', args: { session: '../x' } }, gateway, {})).ok, false)
+  const mine = { answers: [{ id: 'a', selected: ['x'] }] }
+  assert.equal((await run({ method: 'p2bot.answer', args: { session: S, id: 'e1', value: { answers: [{ id: 'zzz', selected: [] }] } } }, gateway, {})).ok, false)
+  assert.equal((await run({ method: 'p2bot.answer', args: { session: S, id: 'e1', value: mine } }, gateway, {})).ok, true)
+  assert.equal((await run({ method: 'p2bot.answer', args: { session: S, id: 'e2', value: 'allowed-once' } }, gateway, {})).ok, true)
+  assert.deepEqual(settled, [['e1', { kind: 'result', value: mine }], ['e2', { kind: 'result', value: 'allowed-once' }]])
+  assert.equal((await run({ method: 'p2bot.answer', args: { session: S, id: 'c1', value: mine } }, gateway, {})).ok, true)  // continued: through the API
+  assert.equal((await run({ method: 'p2bot.answer', args: { session: S, id: 'gone', value: mine } }, gateway, {})).ok, false)
 })

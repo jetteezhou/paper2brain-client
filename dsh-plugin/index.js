@@ -12,7 +12,7 @@ export const inject = ['typertGateway', 'connection']
 // what the page may ask for; anything else is refused here too (the server checks the same list)
 export const ALLOW = new Set([
   'session.list', 'session.create', 'session.prompt', 'session.cancel', 'session.page', 'session.state',
-  'session.modelCatalog', 'session.selectModel', 'session.rename', 'p2bot.token',
+  'session.modelCatalog', 'session.selectModel', 'session.rename', 'p2bot.token', 'p2bot.pending', 'p2bot.answer',
 ])
 
 function settings() {
@@ -33,9 +33,51 @@ export function writeToken({ task, token } = {}) {
   return { ok: true, value: null }
 }
 
+const SESSION = /^session-[0-9a-f-]{36}$/
+// ponytail: a question the agent is waiting on right now lives only in the gateway's pendingRemoteEvents (no public reader or answerer;
+// the same Map that backs `pendingInput`), so it is read and settled there; one that timed out is in the session's projection and has
+// an API. Recheck both with each DeepSeek Harness upgrade (the plugin test fakes them).
+const live = (gateway) => [...(gateway.pendingRemoteEvents?.values() ?? [])]
+
+/** What this session's agent asks its user: open questions and approvals (live), and questions that went on without an answer. */
+export async function pending({ session } = {}, gateway, peer, signal) {
+  if (!SESSION.test(session || '')) return { ok: false, error: 'bad session' }
+  const items = []
+  for (const { frame: f } of live(gateway)) {
+    if (String(f.agentId) !== session) continue
+    if (f.event === 'user-questions/request') items.push({ kind: 'question', id: f.eventId, questions: f.request.questions })
+    else if (f.event === 'approval/request') items.push({ kind: 'approval', id: f.eventId, tool: f.request.toolName, reason: f.request.displayReason || f.request.reason || '' })
+  }
+  const projected = await gateway.invoke({ namespace: 'session', method: 'projections', args: { request: { sessionId: session } }, signal, peer })
+  for (const q of projected?.values?.userQuestions?.active ?? []) if (q.state === 'continued') items.push({ kind: 'question', id: q.callId, questions: q.questions })
+  return { ok: true, value: items }
+}
+
+/** The user's answer: into the open request the agent waits on, else into the continued question (which steers it as a message). */
+export async function answer({ session, id, value } = {}, gateway, peer, signal) {
+  if (!SESSION.test(session || '') || !id) return { ok: false, error: 'bad session or id' }
+  const open = live(gateway).find((p) => p.id === id && String(p.frame.agentId) === session)
+  if (open) {
+    if (typeof gateway.settleRemoteEvent !== 'function') return { ok: false, error: 'this DeepSeek Harness cannot take answers from here' }
+    const asked = open.frame.request.questions?.map((q) => q.id).sort().join()  // same check as userQuestions.answer: each question once
+    if (asked !== undefined && asked !== (value?.answers ?? []).map((a) => a.id).sort().join()) return { ok: false, error: 'the answers do not match the questions' }
+    gateway.settleRemoteEvent(open, { kind: 'result', value })
+    return { ok: true, value: null }
+  }
+  const accepted = await gateway.invoke({ namespace: 'userQuestions', method: 'answer', args: { agentId: session, callId: id, answer: value }, signal, peer })
+  return accepted ? { ok: true, value: null } : { ok: false, error: 'this question is no longer waiting' }
+}
+
 export async function run(call, gateway, peer, signal) {
   if (!ALLOW.has(call.method)) return { ok: false, error: `not allowed: ${call.method}` }
   if (call.method === 'p2bot.token') return writeToken(call.args)
+  if (call.method === 'p2bot.pending' || call.method === 'p2bot.answer') {
+    try {
+      return await (call.method === 'p2bot.pending' ? pending : answer)(call.args, gateway, peer, signal)
+    } catch (e) {
+      return { ok: false, error: String(e?.message || e).slice(0, 500), code: e?.code }
+    }
+  }
   const [namespace, method] = call.method.split('.')
   try {
     return { ok: true, value: await gateway.invoke({ namespace, method, args: call.args || {}, signal, peer }) ?? null }
