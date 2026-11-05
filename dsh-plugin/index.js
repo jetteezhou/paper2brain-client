@@ -15,7 +15,7 @@ export const ALLOW = new Set([
   'session.modelCatalog', 'session.selectModel', 'session.rename', 'p2bot.token', 'p2bot.pending', 'p2bot.answer',
   // the desktop's navigation (workspaces group the sessions; archiving is its delete) and its background jobs
   'p2bot.workspaces', 'p2bot.jobs', 'workspace.rename', 'workspace.pinSession', 'workspace.unpinSession',
-  'workspace.archiveSession', 'workspace.unarchiveSession', 'job.kill', 'workspace.create', 'workspace.delete',
+  'workspace.archiveSession', 'workspace.unarchiveSession', 'job.kill', 'workspace.create', 'workspace.delete', 'workspace.insertBefore',
 ])
 
 function settings() {

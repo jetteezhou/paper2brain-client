@@ -69,7 +69,7 @@ test('the groups and the running jobs are the first frame of their streams, whic
   assert.ok(opened.every((r) => r.signal.aborted))
   assert.equal((await run({ method: 'p2bot.jobs', args: { session: 'x' } }, gateway, {})).ok, false)
   for (const m of ['workspace.rename', 'workspace.pinSession', 'workspace.archiveSession', 'job.kill']) assert.ok(ALLOW.has(m))
-  assert.ok(ALLOW.has('workspace.create') && ALLOW.has('workspace.delete') && !ALLOW.has('settings.update'))
+  assert.ok(ALLOW.has('workspace.create') && ALLOW.has('workspace.delete') && ALLOW.has('workspace.insertBefore') && !ALLOW.has('settings.update'))
   const made = []
   const g = { invoke: async (r) => { made.push(r.args.request.path); return {} } }
   await run({ method: 'workspace.create', args: { request: { path: '~/code/x' } } }, g, {})
