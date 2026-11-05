@@ -13,6 +13,7 @@ export const inject = ['typertGateway', 'connection']
 export const ALLOW = new Set([
   'session.list', 'session.create', 'session.prompt', 'session.cancel', 'session.page', 'session.state',
   'session.modelCatalog', 'session.selectModel', 'session.rename', 'p2bot.token', 'p2bot.pending', 'p2bot.answer',
+  'p2bot.prompt', 'p2bot.permissions', 'p2bot.permission',  // words with the page's attachments; the desktop's permission selector
   // the desktop's navigation (workspaces group the sessions; archiving is its delete) and its background jobs
   'p2bot.workspaces', 'p2bot.jobs', 'workspace.rename', 'workspace.pinSession', 'workspace.unpinSession',
   'workspace.archiveSession', 'workspace.unarchiveSession', 'job.kill', 'workspace.create', 'workspace.delete', 'workspace.insertBefore',
@@ -94,7 +95,55 @@ export async function jobs({ session } = {}, gateway, peer) {
   return { ok: true, value: live.map((j) => ({ id: j.id, kind: j.kind, label: j.label, status: j.status, at: j.startedAt, bytes: j.output?.total ?? 0 })) }
 }
 
-const LOCAL = { 'p2bot.pending': pending, 'p2bot.answer': answer, 'p2bot.workspaces': workspaces, 'p2bot.jobs': jobs }
+const IMAGE = /^image\/(png|jpeg|gif|webp)$/
+
+/** A file the page attached, fetched from the server with this Mac's token (the page uploaded it there first). */
+async function fetchFile(id) {
+  const { server, token } = settings()
+  const res = await fetch(`${server}/api/runner/dsh/file/${encodeURIComponent(id)}`, { headers: { Authorization: `Bearer ${token}` } })
+  if (!res.ok) throw new Error(`attachment ${res.status}`)
+  return Buffer.from(await res.arrayBuffer())
+}
+
+/**
+ * The page's words with its attachments, as the desktop's composer sends them: a picture goes inline, any other file is
+ * uploaded to this session first and cited by its receipt. Then the prompt itself.
+ */
+export async function promptWith({ request, files = [] } = {}, gateway, peer, signal, get = fetchFile) {
+  if (!SESSION.test(request?.sessionId || '')) return { ok: false, error: 'bad session' }
+  const content = [...(request.content || [])]
+  for (const f of files.slice(0, 10)) {
+    const data = (await get(f.id)).toString('base64')
+    if (IMAGE.test(f.mime || '')) content.push({ type: 'image', mediaType: f.mime, data, name: f.name })
+    else {
+      const got = await gateway.invoke({ namespace: 'fileUploads', method: 'upload', args: { agentId: request.sessionId, request: { data, name: f.name } }, signal, peer })
+      content.push({ type: 'file', receiptId: got.receiptId })
+    }
+  }
+  await gateway.invoke({ namespace: 'session', method: 'prompt', args: { request: { ...request, content } }, signal, peer })
+  return { ok: true, value: { accepted: true } }
+}
+
+/** The permission modes the desktop offers (its selector), and this session's current one. */
+export async function permissions({ session } = {}, gateway, peer, signal) {
+  if (!SESSION.test(session || '')) return { ok: false, error: 'bad session' }
+  const catalog = await gateway.invoke({ namespace: 'permissionPresets', method: 'catalog', args: {}, signal, peer })
+  const projected = await gateway.invoke({ namespace: 'session', method: 'projections', args: { request: { sessionId: session } }, signal, peer })
+  const now = projected?.values?.permissions
+  return { ok: true, value: { options: catalog?.options ?? [], current: now?.currentValue ?? now?.preset ?? null } }
+}
+
+/** Switch this session's permission mode, as the desktop's selector does: its `/permission <preset>` command. */
+export async function permission({ session, preset } = {}, gateway, peer, signal) {
+  if (!SESSION.test(session || '') || !/^[\w.-]{1,64}$/.test(preset || '')) return { ok: false, error: 'bad session or preset' }
+  const value = await gateway.invoke({ namespace: 'commands', method: 'execute', args: { agentId: session, line: `/permission ${preset}`, submittedAttachments: [] }, signal, peer })
+  return { ok: true, value: value?.result ?? null }
+}
+
+const LOCAL = {
+  'p2bot.pending': pending, 'p2bot.answer': answer, 'p2bot.workspaces': workspaces, 'p2bot.jobs': jobs,
+  'p2bot.prompt': promptWith, 'p2bot.permissions': permissions, 'p2bot.permission': permission,
+}
 
 export async function run(call, gateway, peer, signal) {
   if (!ALLOW.has(call.method)) return { ok: false, error: `not allowed: ${call.method}` }

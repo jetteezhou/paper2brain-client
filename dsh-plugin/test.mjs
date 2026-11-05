@@ -4,7 +4,7 @@ import test from 'node:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { run, ALLOW, writeToken } from './index.js'
+import { run, ALLOW, writeToken, promptWith, permission } from './index.js'
 
 const S = 'session-11111111-1111-1111-1111-111111111111'
 
@@ -75,4 +75,21 @@ test('the groups and the running jobs are the first frame of their streams, whic
   await run({ method: 'workspace.create', args: { request: { path: '~/code/x' } } }, g, {})
   await run({ method: 'workspace.create', args: { request: { path: '/srv/y' } } }, g, {})
   assert.deepEqual(made, [os.homedir() + '/code/x', '/srv/y'])  // ~ is this Mac's
+})
+
+test('attachments: pictures inline, other files uploaded for a receipt; a permission switch is the desktop\'s own command', async () => {
+  const seen = []
+  const gateway = { invoke: async (r) => { seen.push(r); return r.namespace === 'fileUploads' ? { receiptId: 'rcpt-1' } : { result: { ok: true } } } }
+  const files = { f1: Buffer.from('PNG'), f2: Buffer.from('hello') }
+  const request = { requestId: 'r', sessionId: 'session-11111111-1111-1111-1111-111111111111', mode: 'queue', content: [{ type: 'text', text: '看看' }] }
+  const got = await promptWith({ request, files: [{ id: 'f1', name: 'a.png', mime: 'image/png' }, { id: 'f2', name: 'b.txt', mime: 'text/plain' }] },
+    gateway, {}, undefined, async (id) => files[id])
+  assert.equal(got.ok, true)
+  assert.deepEqual(seen[0].args, { agentId: request.sessionId, request: { data: Buffer.from('hello').toString('base64'), name: 'b.txt' } })
+  assert.deepEqual(seen[1].args.request.content, [{ type: 'text', text: '看看' },
+    { type: 'image', mediaType: 'image/png', data: Buffer.from('PNG').toString('base64'), name: 'a.png' }, { type: 'file', receiptId: 'rcpt-1' }])
+  seen.length = 0
+  assert.equal((await permission({ session: request.sessionId, preset: 'read-only' }, gateway, {})).ok, true)
+  assert.equal(seen[0].args.line, '/permission read-only')
+  assert.equal((await permission({ session: request.sessionId, preset: 'x; /model y' }, gateway, {})).ok, false)
 })
