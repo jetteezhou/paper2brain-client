@@ -38,6 +38,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }
         if !Server.shared.configured { pet.react(.worried("还没连上服务器"), for: 6) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.search.warm() }
     }
 
     func applicationWillTerminate(_ notification: Notification) { hotKey?.unregister(); searchKey?.unregister() }

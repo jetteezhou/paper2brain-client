@@ -493,9 +493,20 @@ final class SearchController {
 
     var visible: Bool { panel?.isVisible == true }
 
-    func toggle() { visible ? close() : show() }
+    func toggle() { visible && !warming ? close() : show() }
 
-    func show() {
+    /// A process's first show pays for SwiftUI, symbols and the text field (0.1-0.6s of a stuck main thread): draw the bar
+    /// once at launch, invisible and without the keyboard, so a real ⌥空格 finds it all loaded.
+    private var warming = false
+    func warm() {
+        show(quiet: true)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [self] in
+            if warming { warming = false; close() }  // a real show in between has cleared the flag: leave it be
+        }
+    }
+
+    func show(quiet: Bool = false) {
+        warming = quiet
         panel?.orderOut(nil)
         let model = SearchModel(jot: jot, resume: kept)
         self.model = model
@@ -508,7 +519,7 @@ final class SearchController {
         if let area = screen?.visibleFrame {
             panel.setFrameTopLeftPoint(NSPoint(x: area.midX - panel.frame.width / 2, y: area.maxY - area.height * 0.22))
         }
-        panel.makeKeyAndOrderFront(nil)
+        if quiet { panel.alphaValue = 0; panel.ignoresMouseEvents = true; panel.orderFrontRegardless() } else { panel.makeKeyAndOrderFront(nil) }
     }
 
     func close() {
