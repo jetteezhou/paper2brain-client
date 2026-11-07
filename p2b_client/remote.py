@@ -47,6 +47,27 @@ def localize(value, local):
     return value
 
 
+def _mac_checkout(repo, post):
+    """Code that lives on this Mac (place mac): the user's own checkout, read where it is and never touched; what is
+    there now (HEAD, recent commits, uncommitted files) goes back to the server, which cannot see it."""
+    path = Path(repo.get("mac_path") or "").expanduser()
+    if not (path / ".git").exists():
+        return {**repo, "note": f"这台 Mac 上没有 {repo.get('mac_path')}：代码在别的成员的 Mac 上，或者路径变了"}
+    git = lambda *a: subprocess.run(["git", "-C", str(path), *a], capture_output=True, text=True).stdout  # noqa: E731
+    head = git("rev-parse", "HEAD").strip()
+    log = [dict(zip(("sha", "date", "author", "subject"), line.split("\x1f")))
+           for line in git("log", "-10", "--date=iso-strict", "--pretty=format:%H%x1f%ad%x1f%an%x1f%s").splitlines() if line]
+    dirty = len(git("status", "--porcelain").splitlines())
+    report = base64.b64encode(json.dumps({"head": head, "log": log, "dirty": dirty}).encode()).decode()
+    try:
+        post({"argv": ["repo", repo["id"], "--file", "report.json"], "files": {"report.json": report}})
+    except (urllib.error.URLError, OSError):
+        pass  # the agent still reads the code; the page shows the older report
+    return {**repo, "path": str(path), "head": head, "recent_commits": log, "uncommitted_files": dirty,
+            "note": "这是用户 Mac 上自己的工作副本：只读，不要 checkout、commit、stash、pull 或改文件。读某次实验时的代码用 "
+                    f"git -C {path} show <commit>:<文件>，找改动用 git -C {path} log / diff。"}
+
+
 def _checkout(repo):
     """The server's checkout is not reachable from here: read the same commit from a clone on this Mac."""
     if not str(repo.get("url", "")).startswith("https://") or not repo.get("head"):
@@ -81,12 +102,16 @@ def main(argv=None):
     argv, files = files_of(sys.argv[1:] if argv is None else argv)
     # a Cursor agent's shell has its id; a TCodex run gets ours from tcodex_runner.py
     agent_id = os.environ.get("P2B_AGENT_ID") or os.environ.get("CURSOR_CONVERSATION_ID")
-    body = {"argv": argv, "files": files, "agent_id": agent_id, "library": os.environ.get("P2B_LIBRARY")}
-    req = urllib.request.Request(f"{server}/api/cli", data=json.dumps(body).encode(), method="POST",
-                                 headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"})
-    try:
+
+    def post(body):
+        body = {**body, "agent_id": agent_id, "library": os.environ.get("P2B_LIBRARY")}
+        req = urllib.request.Request(f"{server}/api/cli", data=json.dumps(body).encode(), method="POST",
+                                     headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"})
         with urllib.request.urlopen(req, timeout=900) as r:
-            got = json.loads(r.read())
+            return json.loads(r.read())
+
+    try:
+        got = post({"argv": argv, "files": files})
     except urllib.error.HTTPError as e:
         try:
             error = json.loads(e.read()).get("error")
@@ -106,8 +131,8 @@ def main(argv=None):
         mine.write_bytes(base64.b64decode(data))
         local[path] = str(mine)
     out = localize(out, local)
-    if argv[:1] == ["repo"] and isinstance(out, dict):
-        out = _checkout(out)
+    if argv[:1] == ["repo"] and isinstance(out, dict) and "url" in out:
+        out = _mac_checkout(out, post) if out.get("place") == "mac" else _checkout(out)
     if argv[:1] == ["guide"] and isinstance(out, dict):
         out = write_guide(out.get("docs") or {})
     if out is not None:

@@ -37,6 +37,24 @@ class Client(unittest.TestCase):
         out = remote.localize({"figures": [{"image": "/srv/a.png"}, {"image": "/srv/b.png"}]}, {"/srv/a.png": "/here/a.png"})
         self.assertEqual([x["image"] for x in out["figures"]], ["/here/a.png", "/srv/b.png"])
 
+    def test_a_mac_repo_is_read_in_place_and_reported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            git = lambda *a: subprocess.run(["git", "-C", tmp, *a], capture_output=True, check=True)  # noqa: E731
+            git("init", "-q")
+            Path(tmp, "train.py").write_text("lr = 1\n")
+            git("add", ".")
+            git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "first")
+            Path(tmp, "train.py").write_text("lr = 2\n")  # uncommitted
+            sent = []
+            out = remote._mac_checkout({"id": "r1", "place": "mac", "mac_path": tmp, "path": "/var/lib/x", "head": "0" * 40}, sent.append)
+            head = subprocess.run(["git", "-C", tmp, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+            self.assertEqual((out["path"], out["head"], out["uncommitted_files"], out["recent_commits"][0]["subject"]), (tmp, head, 1, "first"))
+            report = json.loads(base64.b64decode(sent[0]["files"]["report.json"]))
+            self.assertEqual((sent[0]["argv"], report["head"], report["dirty"]), (["repo", "r1", "--file", "report.json"], head, 1))
+            self.assertEqual(Path(tmp, "train.py").read_text(), "lr = 2\n")  # the user's work is left as it is
+        gone = remote._mac_checkout({"id": "r1", "place": "mac", "mac_path": "/nowhere/repo"}, sent.append)
+        self.assertIn("没有", gone["note"])
+
     def test_guide_replaces_the_specs_and_ignores_odd_names(self):
         folder = Path(tempfile.mkdtemp())
         (folder / "old.md").write_text("gone")
