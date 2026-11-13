@@ -55,6 +55,30 @@ class Client(unittest.TestCase):
         gone = remote._mac_checkout({"id": "r1", "place": "mac", "mac_path": "/nowhere/repo"}, sent.append)
         self.assertIn("没有", gone["note"])
 
+    def test_a_mac_overleaf_project_reports_what_is_not_on_overleaf_yet(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            remote_git, here = Path(tmp, "remote.git"), Path(tmp, "paper")
+            git = lambda *a: subprocess.run(["git", "-C", str(here), "-c", "user.name=t", "-c", "user.email=t@t", *a], capture_output=True, check=True)  # noqa: E731
+            subprocess.run(["git", "init", "-q", "--bare", str(remote_git)], check=True)
+            subprocess.run(["git", "clone", "-q", str(remote_git), str(here)], check=True, capture_output=True)
+            Path(here, "main.tex").write_text("a\n")
+            git("add", ".")
+            git("commit", "-qm", "first")
+            git("push", "-q", "origin", "HEAD")
+            Path(here, "intro.tex").write_text("x\n")
+            git("add", ".")
+            git("commit", "-qm", "in the IDE, not pushed")  # a local commit still counts as not on Overleaf
+            Path(here, "main.tex").write_text("b\n")
+            Path(here, "new.tex").write_text("n\n")
+            sent = []
+            out = remote._mac_overleaf({"place": "mac", "mac_path": str(here), "project": "p"}, "r1", sent.append)
+            self.assertEqual(sorted((f["status"], f["file"]) for f in out["unpushed_files"]), [("??", "new.tex"), ("A", "intro.tex"), ("M", "main.tex")])
+            report = json.loads(base64.b64decode(sent[0]["files"]["report.json"]))
+            self.assertEqual(sent[0]["argv"], ["overleaf", "show", "r1", "--file", "report.json"])
+            self.assertIn("+b", report["diff"])
+            self.assertEqual(out["path"], str(here))
+        self.assertIn("没有", remote._mac_overleaf({"place": "mac", "mac_path": "/nowhere"}, "r1", sent.append)["note"])
+
     def test_guide_replaces_the_specs_and_ignores_odd_names(self):
         folder = Path(tempfile.mkdtemp())
         (folder / "old.md").write_text("gone")

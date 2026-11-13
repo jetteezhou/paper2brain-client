@@ -68,6 +68,26 @@ def _mac_checkout(repo, post):
                     f"git -C {path} show <commit>:<文件>，找改动用 git -C {path} log / diff。"}
 
 
+def _mac_overleaf(out, rid, post):
+    """The research's Overleaf project the user checked out on this Mac: the agent and any IDE edit it there. What is
+    not on Overleaf yet (local commits and edits, against the upstream branch) goes back to the server, which shows it
+    on the 写作 page; pushing stays the user's."""
+    path = Path(out.get("mac_path") or "").expanduser()
+    if not (path / ".git").exists():
+        return {**out, "note": f"这台 Mac 上没有 {out.get('mac_path')}：请用户先把 Overleaf 项目 git clone 到那里，或在写作页改成正确的目录"}
+    git = lambda *a: subprocess.run(["git", "-C", str(path), *a], capture_output=True, text=True).stdout  # noqa: E731
+    base = "@{u}" if git("rev-parse", "--verify", "-q", "@{u}").strip() else "HEAD"
+    files = [{"status": s, "file": f} for s, _, f in (line.partition("\t") for line in git("diff", base, "--name-status").splitlines()) if f]
+    files += [{"status": "??", "file": f} for f in git("ls-files", "--others", "--exclude-standard").splitlines()]
+    report = {"head": git("rev-parse", "HEAD").strip(), "files": files, "diff": git("diff", base, "--no-color")[:200_000]}
+    try:
+        post({"argv": ["overleaf", "show", rid, "--file", "report.json"],
+              "files": {"report.json": base64.b64encode(json.dumps(report).encode()).decode()}})
+    except (urllib.error.URLError, OSError):
+        pass  # the agent still edits here; the page shows the older report
+    return {**out, "path": str(path), "unpushed_files": files}
+
+
 def _checkout(repo):
     """The server's checkout is not reachable from here: read the same commit from a clone on this Mac."""
     if not str(repo.get("url", "")).startswith("https://") or not repo.get("head"):
@@ -133,6 +153,8 @@ def main(argv=None):
     out = localize(out, local)
     if argv[:1] == ["repo"] and isinstance(out, dict) and "url" in out:
         out = _mac_checkout(out, post) if out.get("place") == "mac" else _checkout(out)
+    if argv[:1] == ["overleaf"] and isinstance(out, dict) and out.get("place") == "mac":
+        out = _mac_overleaf(out, argv[2], post)
     if argv[:1] == ["guide"] and isinstance(out, dict):
         out = write_guide(out.get("docs") or {})
     if out is not None:
