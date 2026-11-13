@@ -12,7 +12,7 @@ import time
 import urllib.error
 import urllib.request
 
-from . import CONFIG, api, bot, config, cursor, dsh, server_and_token
+from . import CONFIG, api, bot, config, cursor, dsh, overleaf, server_and_token
 from .codex import codex_turn, tcodex_bin
 
 AT_ONCE = 5  # runs on this Mac at the same time; more wait on the server
@@ -74,7 +74,9 @@ def run_codex(server, token, job):
 def run_api(server, token, job, search, proxy):
     """A quick search call or settings update the server waits for: answer it, or say what went wrong."""
     try:
-        if job.get("op") == "configure":
+        if job.get("backend") == "overleaf":
+            fields = {"result": overleaf.handle(job)}
+        elif job.get("op") == "configure":
             cfg, settings, which = config(), job.get("settings") or {}, "strong_api" if job.get("which") == "strong_api" else "search_api"
             old = cfg.get(which) or {}
             if settings.get("base_url") or (which == "strong_api" and settings.get("model")):
@@ -110,8 +112,8 @@ def main():
     if not server or not token:
         sys.exit("还没连上服务器：先运行 ./setup.sh")
     backends = (["cursor"] if key and machine else []) + (["tcodex"] if tcodex_bin() else []) + (["dsh"] if dsh.dsh_bin() else []) \
-        + ["config"] + (["api"] if api.ready(search) else []) + (["bot"] if bot.enabled() and bot.engines() else [])
-    print(f"{time.strftime('%F %T')} 已连接 {server}，本机可用：{'、'.join(b for b in backends if b != 'config') or '无（缺 Cursor key、tcodex、dsh 和快速搜索接口）'}"
+        + ["config", "overleaf"] + (["api"] if api.ready(search) else []) + (["bot"] if bot.enabled() and bot.engines() else [])
+    print(f"{time.strftime('%F %T')} 已连接 {server}，本机可用：{'、'.join(b for b in backends if b not in ('config', 'overleaf')) or '无（缺 Cursor key、tcodex、dsh 和快速搜索接口）'}"
           + (f"，快速搜索走代理 {proxy}" if proxy and "api" in backends else "")
           + (f"，p2bot 已开启（任务在 {bot.ROOT}）" if "bot" in backends else ""), flush=True)
     busy, lock, models, models_at = [0], threading.Lock(), None, 0.0
@@ -130,8 +132,8 @@ def main():
             dsh_models = []
         with lock:
             full = busy[0] >= AT_ONCE
-        # full of runs: keep asking, but only for search calls and settings, which are short and someone is waiting on
-        take = [b for b in backends if b in ("api", "config")] if full else backends
+        # full of runs: keep asking, but only for calls someone on the page is waiting on (search, settings, Overleaf buttons)
+        take = [b for b in backends if b in ("api", "config", "overleaf")] if full else backends
         try:
             job = _post(server, token, "/api/runner/claim", {"backends": backends, "take": take, "machine": machine, "models": models,
                                                              "dsh_models": dsh_models, "search_api": api.public(search),
@@ -144,7 +146,7 @@ def main():
             continue
         if not job:
             continue
-        run = job["backend"] not in ("api", "config")
+        run = job["backend"] not in ("api", "config", "overleaf")
 
         def work(job=job, run=run, search=search):
             try:

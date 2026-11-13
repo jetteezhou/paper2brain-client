@@ -11,7 +11,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from . import HOME, REPO, server_and_token
+from . import HOME, REPO, overleaf, server_and_token
 
 CACHE = HOME / "cache"
 
@@ -68,24 +68,25 @@ def _mac_checkout(repo, post):
                     f"git -C {path} show <commit>:<文件>，找改动用 git -C {path} log / diff。"}
 
 
-def _mac_overleaf(out, rid, post):
-    """The research's Overleaf project the user checked out on this Mac: the agent and any IDE edit it there. What is
-    not on Overleaf yet (local commits and edits, against the upstream branch) goes back to the server, which shows it
-    on the 写作 page; pushing stays the user's."""
-    path = Path(out.get("mac_path") or "").expanduser()
+def _mac_overleaf(out, argv, post):
+    """The research's Overleaf project the user checked out on this Mac: the agent and any IDE edit it there; pull and
+    compile run here. What is not on Overleaf yet (local commits and edits, against the upstream branch) goes back to
+    the server, which shows it on the 写作 page; pushing stays the user's."""
+    path, action, rid = Path(out.get("mac_path") or "").expanduser(), argv[1], argv[2]
     if not (path / ".git").exists():
         return {**out, "note": f"这台 Mac 上没有 {out.get('mac_path')}：请用户先把 Overleaf 项目 git clone 到那里，或在写作页改成正确的目录"}
-    git = lambda *a: subprocess.run(["git", "-C", str(path), *a], capture_output=True, text=True).stdout  # noqa: E731
-    base = "@{u}" if git("rev-parse", "--verify", "-q", "@{u}").strip() else "HEAD"
-    files = [{"status": s, "file": f} for s, _, f in (line.partition("\t") for line in git("diff", base, "--name-status").splitlines()) if f]
-    files += [{"status": "??", "file": f} for f in git("ls-files", "--others", "--exclude-standard").splitlines()]
-    report = {"head": git("rev-parse", "HEAD").strip(), "files": files, "diff": git("diff", base, "--no-color")[:200_000]}
+    try:
+        got = overleaf.handle({"op": action if action in ("pull", "compile") else "status", "path": str(path)})
+    except (RuntimeError, OSError, subprocess.SubprocessError) as e:
+        _fail(str(e))
+    report = {**got["status"], **({"pdf": got["pdf"]} if got.get("pdf") else {})}  # the page previews what the agent built
     try:
         post({"argv": ["overleaf", "show", rid, "--file", "report.json"],
               "files": {"report.json": base64.b64encode(json.dumps(report).encode()).decode()}})
     except (urllib.error.URLError, OSError):
         pass  # the agent still edits here; the page shows the older report
-    return {**out, "path": str(path), "unpushed_files": files}
+    return {**{k: v for k, v in out.items() if k != "note"}, "path": str(path), "unpushed_files": report["files"],
+            **({"build": str(path.parent / (path.name + ".build")), "log": got["log"]} if action == "compile" else {})}
 
 
 def _checkout(repo):
@@ -154,7 +155,7 @@ def main(argv=None):
     if argv[:1] == ["repo"] and isinstance(out, dict) and "url" in out:
         out = _mac_checkout(out, post) if out.get("place") == "mac" else _checkout(out)
     if argv[:1] == ["overleaf"] and isinstance(out, dict) and out.get("place") == "mac":
-        out = _mac_overleaf(out, argv[2], post)
+        out = _mac_overleaf(out, argv, post)
     if argv[:1] == ["guide"] and isinstance(out, dict):
         out = write_guide(out.get("docs") or {})
     if out is not None:

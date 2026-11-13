@@ -14,7 +14,7 @@ import contextlib  # noqa: E402
 import io  # noqa: E402
 import json  # noqa: E402
 
-from p2b_client import api, bot, codex, cursor, dsh, remote, runner  # noqa: E402
+from p2b_client import api, bot, codex, cursor, dsh, overleaf, remote, runner  # noqa: E402
 
 
 def sse(*pairs):
@@ -71,13 +71,49 @@ class Client(unittest.TestCase):
             Path(here, "main.tex").write_text("b\n")
             Path(here, "new.tex").write_text("n\n")
             sent = []
-            out = remote._mac_overleaf({"place": "mac", "mac_path": str(here), "project": "p"}, "r1", sent.append)
+            out = remote._mac_overleaf({"place": "mac", "mac_path": str(here), "project": "p"}, ["overleaf", "show", "r1"], sent.append)
             self.assertEqual(sorted((f["status"], f["file"]) for f in out["unpushed_files"]), [("??", "new.tex"), ("A", "intro.tex"), ("M", "main.tex")])
             report = json.loads(base64.b64decode(sent[0]["files"]["report.json"]))
             self.assertEqual(sent[0]["argv"], ["overleaf", "show", "r1", "--file", "report.json"])
             self.assertIn("+b", report["diff"])
             self.assertEqual(out["path"], str(here))
-        self.assertIn("没有", remote._mac_overleaf({"place": "mac", "mac_path": "/nowhere"}, "r1", sent.append)["note"])
+        self.assertIn("没有", remote._mac_overleaf({"place": "mac", "mac_path": "/nowhere"}, ["overleaf", "show", "r1"], sent.append)["note"])
+
+    def test_the_writing_pages_overleaf_buttons_run_in_the_users_checkout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            origin, here, other = Path(tmp, "remote.git"), Path(tmp, "paper"), Path(tmp, "overleaf-side")
+            subprocess.run(["git", "init", "-q", "--bare", "-b", "master", str(origin)], check=True)
+            who = ["-c", "user.name=t", "-c", "user.email=t@t"]
+            git = lambda d, *a: subprocess.run(["git", "-C", str(d), *who, *a], capture_output=True, text=True, check=True).stdout  # noqa: E731
+            subprocess.run(["git", "clone", "-q", str(origin), str(here)], check=True, capture_output=True)
+            Path(here, "main.tex").write_text("\\documentclass{article}\\begin{document}a\\end{document}\n")
+            git(here, "add", ".")
+            git(here, "commit", "-qm", "first")
+            git(here, "push", "-q", "origin", "HEAD")
+            subprocess.run(["git", "clone", "-q", str(origin), str(other)], check=True, capture_output=True)
+            do = lambda op, **kw: overleaf.handle({"op": op, "path": str(here), **kw})  # noqa: E731
+            with self.assertRaisesRegex(RuntimeError, "没有要推送"):
+                do("push")
+            Path(here, "intro.tex").write_text("x\n")
+            got = do("push", message="引言")
+            self.assertEqual(got["status"]["files"], [])
+            self.assertEqual(git(other, "pull", "-q") or Path(other, "intro.tex").read_text(), "x\n")  # it is on Overleaf now
+            Path(other, "main.tex").write_text("theirs\n")  # edited in Overleaf meanwhile
+            git(other, "commit", "-qam", "theirs")
+            git(other, "push", "-q")
+            Path(here, "main.tex").write_text("mine\n")  # the same line here: the push fails, the edit stays
+            with self.assertRaisesRegex(RuntimeError, "推送失败"):
+                do("push")
+            self.assertEqual((Path(here, "main.tex").read_text(), git(here, "status", "--porcelain").split()), ("mine\n", ["M", "main.tex"]))
+            do("discard")
+            self.assertEqual(git(here, "status", "--porcelain"), "")
+            do("pull")
+            self.assertEqual(Path(here, "main.tex").read_text(), "theirs\n")
+            if shutil.which("latexmk") or Path("/Library/TeX/texbin/latexmk").exists():
+                Path(here, "main.tex").write_text("\\documentclass{article}\\begin{document}hi\\end{document}\n")
+                got = do("compile")
+                self.assertTrue(base64.b64decode(got["pdf"]).startswith(b"%PDF"))
+                self.assertEqual([f["file"] for f in got["status"]["files"]], ["main.tex"])  # build files stay outside the checkout
 
     def test_guide_replaces_the_specs_and_ignores_odd_names(self):
         folder = Path(tempfile.mkdtemp())
